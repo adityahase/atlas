@@ -1,0 +1,167 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-05-25 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "description",
+  "server",
+  "image",
+  "section_break_resources",
+  "vcpus",
+  "memory_megabytes",
+  "disk_gigabytes",
+  "section_break_networking",
+  "ipv6_address",
+  "mac_address",
+  "tap_device",
+  "section_break_access",
+  "ssh_public_key",
+  "section_break_state",
+  "status",
+  "last_started",
+  "last_stopped"
+ ],
+ "fields": [
+  {
+   "fieldname": "description",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_global_search": 1,
+   "label": "Description"
+  },
+  {
+   "fieldname": "server",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Server",
+   "options": "Server",
+   "reqd": 1
+  },
+  {
+   "fieldname": "image",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Image",
+   "options": "Virtual Machine Image",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_resources",
+   "fieldtype": "Section Break",
+   "label": "Resources"
+  },
+  {
+   "default": "1",
+   "fieldname": "vcpus",
+   "fieldtype": "Int",
+   "label": "vCPUs",
+   "reqd": 1
+  },
+  {
+   "default": "512",
+   "fieldname": "memory_megabytes",
+   "fieldtype": "Int",
+   "label": "Memory (MB)",
+   "reqd": 1
+  },
+  {
+   "default": "4",
+   "fieldname": "disk_gigabytes",
+   "fieldtype": "Int",
+   "label": "Disk (GB)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_networking",
+   "fieldtype": "Section Break",
+   "label": "Networking"
+  },
+  {
+   "fieldname": "ipv6_address",
+   "fieldtype": "Data",
+   "label": "IPv6 Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "mac_address",
+   "fieldtype": "Data",
+   "label": "MAC Address",
+   "read_only": 1
+  },
+  {
+   "fieldname": "tap_device",
+   "fieldtype": "Data",
+   "label": "TAP Device",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_access",
+   "fieldtype": "Section Break",
+   "label": "Access"
+  },
+  {
+   "fieldname": "ssh_public_key",
+   "fieldtype": "Long Text",
+   "label": "SSH Public Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_state",
+   "fieldtype": "Section Break",
+   "label": "State"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nProvisioning\nRunning\nStopped\nFailed\nArchived",
+   "reqd": 1
+  },
+  {
+   "fieldname": "last_started",
+   "fieldtype": "Datetime",
+   "label": "Last Started",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_stopped",
+   "fieldtype": "Datetime",
+   "label": "Last Stopped",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-05-25 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Atlas",
+ "name": "Virtual Machine",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "description,status,server",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "description",
+ "track_changes": 1
+}

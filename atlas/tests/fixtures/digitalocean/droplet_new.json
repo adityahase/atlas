@@ -1,0 +1,8 @@
+{
+  "droplet": {
+    "id": 412345678,
+    "name": "atlas-e2e-test",
+    "status": "new",
+    "networks": {"v4": [], "v6": []}
+  }
+}

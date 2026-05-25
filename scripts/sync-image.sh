@@ -29,17 +29,17 @@ set -euo pipefail
 : "${GUEST_NETWORK_UNIT:?required}"
 
 image_directory="/var/lib/atlas/images/${IMAGE_NAME}"
-install -d -m 0700 "$image_directory"
+sudo install -d -m 0700 "$image_directory"
 
 # 1. Kernel.
 kernel_path="${image_directory}/${KERNEL_FILENAME}"
-if [ -f "$kernel_path" ] && echo "${KERNEL_SHA256}  ${kernel_path}" | sha256sum -c --status -; then
+if [ -f "$kernel_path" ] && echo "${KERNEL_SHA256}  ${kernel_path}" | sudo sha256sum -c --status -; then
     echo "Kernel already present and matches checksum."
 else
-    rm -f "${kernel_path}.part"
-    curl -fsSL --output "${kernel_path}.part" "$KERNEL_URL"
-    echo "${KERNEL_SHA256}  ${kernel_path}.part" | sha256sum -c -
-    mv "${kernel_path}.part" "$kernel_path"
+    sudo rm -f "${kernel_path}.part"
+    sudo curl -fsSL --output "${kernel_path}.part" "$KERNEL_URL"
+    echo "${KERNEL_SHA256}  ${kernel_path}.part" | sudo sha256sum -c -
+    sudo mv "${kernel_path}.part" "$kernel_path"
 fi
 
 # 2. Rootfs.
@@ -51,30 +51,29 @@ fi
 
 squashfs_path="/tmp/atlas-${IMAGE_NAME}.squashfs"
 extracted_directory="/tmp/atlas-${IMAGE_NAME}-rootfs"
-rm -f "${squashfs_path}.part" "$squashfs_path"
-rm -rf "$extracted_directory"
+sudo rm -f "${squashfs_path}.part" "$squashfs_path"
+sudo rm -rf "$extracted_directory"
 
-curl -fsSL --output "${squashfs_path}.part" "$ROOTFS_URL"
-echo "${ROOTFS_SHA256}  ${squashfs_path}.part" | sha256sum -c -
-mv "${squashfs_path}.part" "$squashfs_path"
+sudo curl -fsSL --output "${squashfs_path}.part" "$ROOTFS_URL"
+echo "${ROOTFS_SHA256}  ${squashfs_path}.part" | sudo sha256sum -c -
+sudo mv "${squashfs_path}.part" "$squashfs_path"
 
-unsquashfs -d "$extracted_directory" "$squashfs_path"
+sudo unsquashfs -d "$extracted_directory" "$squashfs_path"
 
 # 3. Install the guest network unit and a placeholder env file.
-install -d -m 0755 "${extracted_directory}/etc/systemd/system"
-install -d -m 0755 "${extracted_directory}/etc/systemd/system/multi-user.target.wants"
-install -m 0644 "$GUEST_NETWORK_UNIT" "${extracted_directory}/etc/systemd/system/atlas-network.service"
-ln -sf /etc/systemd/system/atlas-network.service \
+sudo install -d -m 0755 "${extracted_directory}/etc/systemd/system"
+sudo install -d -m 0755 "${extracted_directory}/etc/systemd/system/multi-user.target.wants"
+sudo install -m 0644 "$GUEST_NETWORK_UNIT" "${extracted_directory}/etc/systemd/system/atlas-network.service"
+sudo ln -sf /etc/systemd/system/atlas-network.service \
     "${extracted_directory}/etc/systemd/system/multi-user.target.wants/atlas-network.service"
-: > "${extracted_directory}/etc/atlas-network.env"
-chmod 0644 "${extracted_directory}/etc/atlas-network.env"
+echo "" | sudo install -m 0644 /dev/stdin "${extracted_directory}/etc/atlas-network.env"
 
 # 4. Build the ext4.
-chown -R root:root "$extracted_directory"
-truncate -s "${DEFAULT_DISK_GB}G" "${rootfs_path}.part"
-mkfs.ext4 -q -d "$extracted_directory" -F "${rootfs_path}.part"
-mv "${rootfs_path}.part" "$rootfs_path"
+sudo chown -R root:root "$extracted_directory"
+sudo truncate -s "${DEFAULT_DISK_GB}G" "${rootfs_path}.part"
+sudo mkfs.ext4 -q -d "$extracted_directory" -F "${rootfs_path}.part"
+sudo mv "${rootfs_path}.part" "$rootfs_path"
 
-rm -rf "$extracted_directory" "$squashfs_path"
+sudo rm -rf "$extracted_directory" "$squashfs_path"
 
 echo "Image ${IMAGE_NAME} ready."

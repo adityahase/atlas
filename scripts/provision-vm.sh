@@ -32,38 +32,37 @@ set -euo pipefail
 image_directory="/var/lib/atlas/images/${IMAGE_NAME}"
 vm_directory="/var/lib/atlas/virtual-machines/${VIRTUAL_MACHINE_NAME}"
 
-install -d -m 0700 "$vm_directory"
-install -d -m 0700 "${vm_directory}/log"
+sudo install -d -m 0700 "$vm_directory"
+sudo install -d -m 0700 "${vm_directory}/log"
 
 # 1. Per-VM rootfs: copy and resize.
 rootfs_path="${vm_directory}/rootfs.ext4"
 if [ ! -f "$rootfs_path" ]; then
-    cp "${image_directory}/${ROOTFS_FILENAME}" "${rootfs_path}.part"
-    truncate -s "${DISK_GB}G" "${rootfs_path}.part"
-    e2fsck -fy "${rootfs_path}.part" >/dev/null 2>&1 || true
-    resize2fs "${rootfs_path}.part" >/dev/null
-    mv "${rootfs_path}.part" "$rootfs_path"
+    sudo cp "${image_directory}/${ROOTFS_FILENAME}" "${rootfs_path}.part"
+    sudo truncate -s "${DISK_GB}G" "${rootfs_path}.part"
+    sudo e2fsck -fy "${rootfs_path}.part" >/dev/null 2>&1 || true
+    sudo resize2fs "${rootfs_path}.part" >/dev/null
+    sudo mv "${rootfs_path}.part" "$rootfs_path"
 fi
 
 # 2. Inject SSH key and per-VM network env.
-mount_point="$(mktemp -d /tmp/atlas-mount-XXXXXX)"
-mount -o loop "$rootfs_path" "$mount_point"
-trap 'umount "$mount_point" 2>/dev/null || true; rmdir "$mount_point" 2>/dev/null || true' EXIT
+mount_point="$(sudo mktemp -d /tmp/atlas-mount-XXXXXX)"
+sudo mount -o loop "$rootfs_path" "$mount_point"
+trap 'sudo umount "$mount_point" 2>/dev/null || true; sudo rmdir "$mount_point" 2>/dev/null || true' EXIT
 
-install -d -m 0700 "${mount_point}/root/.ssh"
-printf '%s\n' "$SSH_PUBLIC_KEY" > "${mount_point}/root/.ssh/authorized_keys"
-chmod 0600 "${mount_point}/root/.ssh/authorized_keys"
+sudo install -d -m 0700 "${mount_point}/root/.ssh"
+printf '%s\n' "$SSH_PUBLIC_KEY" | sudo install -m 0600 /dev/stdin "${mount_point}/root/.ssh/authorized_keys"
 
-install -m 0644 /dev/stdin "${mount_point}/etc/atlas-network.env" <<EOF
+sudo install -m 0644 /dev/stdin "${mount_point}/etc/atlas-network.env" <<EOF
 VIRTUAL_MACHINE_IPV6=${VIRTUAL_MACHINE_IPV6}
 EOF
 
-umount "$mount_point"
-rmdir "$mount_point"
+sudo umount "$mount_point"
+sudo rmdir "$mount_point"
 trap - EXIT
 
 # 3. Firecracker config.
-install -m 0644 /dev/stdin "${vm_directory}/firecracker.json" <<EOF
+sudo install -m 0644 /dev/stdin "${vm_directory}/firecracker.json" <<EOF
 {
   "boot-source": {
     "kernel_image_path": "${image_directory}/${KERNEL_FILENAME}",
@@ -92,12 +91,12 @@ install -m 0644 /dev/stdin "${vm_directory}/firecracker.json" <<EOF
 EOF
 
 # 4. Sidecar that vm-network-up.sh reads. Stable across host reboots.
-install -m 0644 /dev/stdin "${vm_directory}/network.env" <<EOF
+sudo install -m 0644 /dev/stdin "${vm_directory}/network.env" <<EOF
 TAP_DEVICE=${TAP_DEVICE}
 VIRTUAL_MACHINE_IPV6=${VIRTUAL_MACHINE_IPV6}
 EOF
 
 # 5. Enable and start the systemd unit.
-systemctl enable --now "firecracker-vm@${VIRTUAL_MACHINE_NAME}.service"
+sudo systemctl enable --now "firecracker-vm@${VIRTUAL_MACHINE_NAME}.service"
 
 echo "Provisioned ${VIRTUAL_MACHINE_NAME}."

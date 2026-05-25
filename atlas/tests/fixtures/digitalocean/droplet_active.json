@@ -1,0 +1,18 @@
+{
+  "droplet": {
+    "id": 412345678,
+    "name": "atlas-e2e-test",
+    "status": "active",
+    "region": {"slug": "blr1"},
+    "size": {"slug": "s-2vcpu-4gb-intel"},
+    "image": {"slug": "ubuntu-24-04-x64"},
+    "networks": {
+      "v4": [
+        {"ip_address": "139.59.1.2", "netmask": "255.255.240.0", "gateway": "139.59.0.1", "type": "public"}
+      ],
+      "v6": [
+        {"ip_address": "2a03:b0c0:abcd:1234::1", "netmask": 64, "gateway": "2a03:b0c0:abcd:1234::1", "type": "public"}
+      ]
+    }
+  }
+}

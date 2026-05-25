@@ -22,17 +22,17 @@ virtual_machine_name="${1:?virtual machine name required}"
 uplink="$(ip -j -6 route show default | jq -r '.[0].dev')"
 
 # Tap device: clean re-create so a restart picks up correct state.
-ip link del "$TAP_DEVICE" 2>/dev/null || true
-ip tuntap add "$TAP_DEVICE" mode tap
-ip link set "$TAP_DEVICE" up
-ip -6 addr add fe80::1/64 dev "$TAP_DEVICE" nodad
+sudo ip link del "$TAP_DEVICE" 2>/dev/null || true
+sudo ip tuntap add "$TAP_DEVICE" mode tap
+sudo ip link set "$TAP_DEVICE" up
+sudo ip -6 addr add fe80::1/64 dev "$TAP_DEVICE" nodad
 
 # Route the VM's /128 over the tap.
-ip -6 route replace "${VIRTUAL_MACHINE_IPV6}/128" dev "$TAP_DEVICE"
+sudo ip -6 route replace "${VIRTUAL_MACHINE_IPV6}/128" dev "$TAP_DEVICE"
 
 # Answer NDP for the VM on the uplink.
-ip -6 neigh replace proxy "$VIRTUAL_MACHINE_IPV6" dev "$uplink"
+sudo ip -6 neigh replace proxy "$VIRTUAL_MACHINE_IPV6" dev "$uplink"
 
 # Forwarding rules.
-nft add rule inet atlas forward ip6 daddr "$VIRTUAL_MACHINE_IPV6" oifname "$TAP_DEVICE" accept
-nft add rule inet atlas forward ip6 saddr "$VIRTUAL_MACHINE_IPV6" iifname "$TAP_DEVICE" accept
+sudo nft add rule inet atlas forward ip6 daddr "$VIRTUAL_MACHINE_IPV6" oifname "$TAP_DEVICE" accept
+sudo nft add rule inet atlas forward ip6 saddr "$VIRTUAL_MACHINE_IPV6" iifname "$TAP_DEVICE" accept

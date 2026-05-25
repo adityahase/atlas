@@ -1,0 +1,156 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:server_name",
+ "creation": "2026-05-25 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "server_name",
+  "provider",
+  "provider_resource_id",
+  "region",
+  "size",
+  "section_break_networking",
+  "ipv4_address",
+  "ipv6_address",
+  "ipv6_prefix",
+  "ipv6_virtual_machine_range",
+  "section_break_state",
+  "status",
+  "architecture",
+  "firecracker_version",
+  "kernel_version",
+  "section_break_notes",
+  "notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "server_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Server Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "provider",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Provider",
+   "options": "Server Provider",
+   "reqd": 1
+  },
+  {
+   "fieldname": "provider_resource_id",
+   "fieldtype": "Data",
+   "label": "Provider Resource ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "region",
+   "fieldtype": "Data",
+   "label": "Region",
+   "read_only": 1
+  },
+  {
+   "fieldname": "size",
+   "fieldtype": "Data",
+   "label": "Size",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_networking",
+   "fieldtype": "Section Break",
+   "label": "Networking"
+  },
+  {
+   "fieldname": "ipv4_address",
+   "fieldtype": "Data",
+   "label": "IPv4 Address"
+  },
+  {
+   "fieldname": "ipv6_address",
+   "fieldtype": "Data",
+   "label": "IPv6 Address"
+  },
+  {
+   "fieldname": "ipv6_prefix",
+   "fieldtype": "Data",
+   "label": "IPv6 Prefix (/64)"
+  },
+  {
+   "fieldname": "ipv6_virtual_machine_range",
+   "fieldtype": "Data",
+   "label": "IPv6 VM Range (/124)"
+  },
+  {
+   "fieldname": "section_break_state",
+   "fieldtype": "Section Break",
+   "label": "State"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nBootstrapping\nActive\nDraining\nBroken\nArchived",
+   "reqd": 1
+  },
+  {
+   "fieldname": "architecture",
+   "fieldtype": "Data",
+   "label": "Architecture",
+   "read_only": 1
+  },
+  {
+   "fieldname": "firecracker_version",
+   "fieldtype": "Data",
+   "label": "Firecracker Version",
+   "read_only": 1
+  },
+  {
+   "fieldname": "kernel_version",
+   "fieldtype": "Data",
+   "label": "Kernel Version",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_notes",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text",
+   "label": "Notes"
+  }
+ ],
+ "links": [],
+ "modified": "2026-05-25 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Atlas",
+ "name": "Server",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
