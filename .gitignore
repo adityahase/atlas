@@ -60,3 +60,6 @@ jspm_packages/
 .coveragerc
 coverage*.xml
 plan/layouts.md
+
+### Playwright
+.playwright-mcp/
