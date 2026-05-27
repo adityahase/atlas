@@ -1,4 +1,7 @@
-# Atlas
+<div align="center">
+  <img src="atlas/public/images/atlas-logo.svg" alt="Atlas" width="80" height="80">
+  <h1>Atlas</h1>
+</div>
 
 Atlas manages Firecracker virtual machines on servers. It is the lowest
 layer of a Frappe hosting platform; sites, benches, IAM, and billing live

@@ -11,15 +11,14 @@ app_license = "agpl-3.0"
 # required_apps = []
 
 # Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "atlas",
-# 		"logo": "/assets/atlas/logo.png",
-# 		"title": "Atlas",
-# 		"route": "/atlas",
-# 		"has_permission": "atlas.api.permission.has_app_permission"
-# 	}
-# ]
+add_to_apps_screen = [
+	{
+		"name": "atlas",
+		"logo": "/assets/atlas/images/atlas-logo.svg",
+		"title": "Atlas",
+		"route": "/app/atlas",
+	}
+]
 
 # Includes in <head>
 # ------------------
@@ -258,4 +257,3 @@ require_type_annotated_api_methods = True
 # ------------
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
-

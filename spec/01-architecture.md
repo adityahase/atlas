@@ -49,6 +49,38 @@ the result of one SSH invocation that runs one shell script. The script comes
 from this repository, under [`atlas/scripts/`](../scripts/). The Frappe code
 uploads the script, runs it, and records the result.
 
+### Desk navigation
+
+When the operator logs in, the desk has to surface Atlas. Frappe v16 has
+several disjoint discoverability surfaces and an app needs all of them
+wired or only some routes work:
+
+- **`add_to_apps_screen` hook** in [`hooks.py`](../atlas/hooks.py) — the
+  registration that makes Frappe treat Atlas as a first-class app.
+  `frappe.apps.get_default_path()` reads this to decide where to send the
+  user on login; without it the user lands on the generic `/app` and has
+  to find Atlas themselves. The hook also drives the tile on the `/apps`
+  app launcher screen.
+- **`Workspace` document `Atlas`** in
+  [`atlas/atlas/workspace/atlas/atlas.json`](../atlas/atlas/workspace/atlas/atlas.json)
+  — the page rendered at `/app/atlas`. Carries the shortcuts, number
+  cards, and DocType card groups. This is what the operator actually
+  reads when they arrive.
+- **`Workspace Sidebar` document `Atlas`** in
+  [`atlas/workspace_sidebar/atlas.json`](../atlas/workspace_sidebar/atlas.json)
+  — the left-rail sidebar group with direct links to the five Atlas
+  DocTypes. The `Home` item points back at the `Atlas` Workspace.
+- **`Desktop Icon`** rows — the launcher tile on `/apps`. Frappe
+  generates these from `add_to_apps_screen` via `after_app_install`, so
+  on fresh installs nothing in this app needs to do it. The
+  [`install_atlas_sidebar`](../atlas/patches/v1_0/install_atlas_sidebar.py)
+  patch backfills it for sites where Atlas was installed before the
+  hook was added.
+
+The connections between DocTypes (Server → Virtual Machine → Task) are
+rendered by Frappe's standard Connections dashboard on each form, driven
+by `<doctype>_dashboard.py` next to each DocType controller.
+
 ### Server Provider
 
 Two provider types are implemented:

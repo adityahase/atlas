@@ -1,0 +1,156 @@
+{
+ "app": "atlas",
+ "charts": [],
+ "content": "[{\"id\":\"hdr_shortcuts\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Your Shortcuts</b></span>\",\"col\":12}},{\"id\":\"sc_server\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Server\",\"col\":3}},{\"id\":\"sc_vm\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Virtual Machine\",\"col\":3}},{\"id\":\"sc_task\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Task\",\"col\":3}},{\"id\":\"sc_image\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Virtual Machine Image\",\"col\":3}},{\"id\":\"sp1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr_overview\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Overview</b></span>\",\"col\":12}},{\"id\":\"nc_active_servers\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Active Servers\",\"col\":3}},{\"id\":\"nc_running_vms\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Running Virtual Machines\",\"col\":3}},{\"id\":\"nc_tasks_today\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Tasks Today\",\"col\":3}},{\"id\":\"nc_failed_tasks\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Failed Tasks (24h)\",\"col\":3}},{\"id\":\"sp2\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr_reports\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Reports &amp; Masters</b></span>\",\"col\":12}},{\"id\":\"card_infra\",\"type\":\"card\",\"data\":{\"card_name\":\"Infrastructure\",\"col\":4}},{\"id\":\"card_workloads\",\"type\":\"card\",\"data\":{\"card_name\":\"Workloads\",\"col\":4}},{\"id\":\"card_activity\",\"type\":\"card\",\"data\":{\"card_name\":\"Activity\",\"col\":4}}]",
+ "creation": "2026-05-27 00:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "server",
+ "idx": 1,
+ "is_hidden": 0,
+ "label": "Atlas",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Infrastructure",
+   "link_count": 2,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Server Provider",
+   "link_count": 0,
+   "link_to": "Server Provider",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Server",
+   "link_count": 0,
+   "link_to": "Server",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Workloads",
+   "link_count": 2,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Virtual Machine",
+   "link_count": 0,
+   "link_to": "Virtual Machine",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Virtual Machine Image",
+   "link_count": 0,
+   "link_to": "Virtual Machine Image",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Activity",
+   "link_count": 1,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Task",
+   "link_count": 0,
+   "link_to": "Task",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-05-27 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Atlas",
+ "name": "Atlas",
+ "number_cards": [
+  {
+   "label": "Active Servers",
+   "number_card_name": "Active Servers"
+  },
+  {
+   "label": "Running Virtual Machines",
+   "number_card_name": "Running Virtual Machines"
+  },
+  {
+   "label": "Tasks Today",
+   "number_card_name": "Tasks Today"
+  },
+  {
+   "label": "Failed Tasks (24h)",
+   "number_card_name": "Failed Tasks (24h)"
+  }
+ ],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "restrict_to_domain": "",
+ "roles": [],
+ "sequence_id": 1.0,
+ "shortcuts": [
+  {
+   "color": "Blue",
+   "doc_view": "List",
+   "label": "Server",
+   "link_to": "Server",
+   "stats_filter": "[[\"status\",\"=\",\"Active\"]]",
+   "type": "DocType"
+  },
+  {
+   "color": "Green",
+   "doc_view": "List",
+   "label": "Virtual Machine",
+   "link_to": "Virtual Machine",
+   "stats_filter": "[[\"status\",\"=\",\"Running\"]]",
+   "type": "DocType"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Task",
+   "link_to": "Task",
+   "stats_filter": "[[\"status\",\"=\",\"Running\"]]",
+   "type": "DocType"
+  },
+  {
+   "color": "Yellow",
+   "doc_view": "List",
+   "label": "Virtual Machine Image",
+   "link_to": "Virtual Machine Image",
+   "stats_filter": "[[\"is_active\",\"=\",1]]",
+   "type": "DocType"
+  }
+ ],
+ "title": "Atlas",
+ "type": "Workspace"
+}
