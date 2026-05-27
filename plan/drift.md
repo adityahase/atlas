@@ -688,6 +688,36 @@ section enumerates the explicit exclusions.
   comment still mentions `terminate-vm.sh` as the host-side counterpart.
 - Resolve: nothing — caller is the operator, who reads the function name.
 
+### N2. E2E suite reorganized by operator use case (post-iteration-1)
+
+- Spec / plan (old): the e2e suite was structured as phase-1 …
+  phase-11 modules under [`atlas/tests/e2e/`](../atlas/tests/e2e/), one
+  module per implementation phase. Phases 8, 9, 10, 11 were extension
+  modules added during the e2e coverage iteration that didn't map to any
+  operator action.
+- Implementation (revised post-iteration-1): the suite is now grouped
+  by **operator use case** under
+  [`atlas/tests/e2e/use_cases/`](../atlas/tests/e2e/use_cases). Seven
+  modules — `digitalocean_client`, `ssh_primitive`,
+  `server_provisioning`, `image_sync`, `virtual_machine_provisioning`,
+  `virtual_machine_lifecycle`, `run_task` — each owning the happy path,
+  the operator-visible negative paths, and the DocType-level validation
+  throws that guard the same code path. Validation no longer lives in a
+  separate "phase 8 negatives" module; it lives with the use case it
+  guards. Background-job synchronous-call coverage (formerly phase 10)
+  is folded into the use cases whose workers it instruments.
+- The orchestrators (`run_all`, `run_all_coverage`) still take exactly
+  one / three billable droplets respectively. The `phase()` context
+  manager is unchanged (the name is now a vestige; renaming would break
+  operators using `bench execute atlas.tests.e2e._shared.phase`).
+- Resolve: spec README, [plan/00-overview](./00-overview.md), and
+  [plan/e2e-coverage](./e2e-coverage.md) updated alongside the move; the
+  authoritative guideline is [plan/e2e-testing.md](./e2e-testing.md).
+  The per-phase plan files keep a banner pointing at the new layout but
+  are otherwise unchanged — they are history.
+- **Resolved (post-iteration-1 e2e reorganization):** code, spec, plan,
+  README all match.
+
 ### N1. IPv6 addresses are reused after VM termination
 
 - Spec (06-networking.md, old): "We deliberately do **not** reuse addresses

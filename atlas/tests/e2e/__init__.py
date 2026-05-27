@@ -1,42 +1,58 @@
 """End-to-end tests for Atlas.
 
+Tests are grouped by **operator use case** (see [use_cases/](./use_cases/)).
+Each use case module exercises one operator-visible operation: provisioning
+a server, syncing an image, provisioning a VM, operating a VM, running an
+ad-hoc task, talking to DigitalOcean, or using the SSH primitive directly.
+
 `run_all()` is the cheap regression entry point: one shared droplet, every
-phase that takes a server runs against it, and the droplet is cleaned up
-when the last phase exits. Phases 2 and 3 still own their dedicated-droplet
-flows (DO client smoke test, fresh-provision); they are not run by
-`run_all` to keep the cost at exactly one billable droplet.
+use case that takes a server runs against it, droplet cleaned up at the
+end. `run_all_coverage()` additionally runs the dedicated-droplet use cases
+(server-provisioning fresh path, DigitalOcean-client round trip).
+
+Use cases that bring their own droplet semantics (or no droplet at all) are
+not orchestrated here — they are invoked directly:
+
+    bench --site atlas.local execute atlas.tests.e2e.use_cases.ssh_primitive.run
+    bench --site atlas.local execute atlas.tests.e2e.use_cases.digitalocean_client.run
+    bench --site atlas.local execute atlas.tests.e2e.use_cases.server_provisioning.run
 """
 
 import time
 import traceback
 
-from atlas.tests.e2e import (
-	phase_4,
-	phase_5,
-	phase_6,
-	phase_7,
-	phase_8,
-	phase_9,
-	phase_10,
-	phase_11,
-)
 from atlas.tests.e2e._shared import (
 	cleanup_droplet,
 	ensure_bootstrapped_server,
 	get_client,
 	sweep_old_droplets,
 )
+from atlas.tests.e2e.use_cases import (
+	image_sync,
+	run_task,
+	server_provisioning,
+	ssh_primitive,
+	virtual_machine_lifecycle,
+	virtual_machine_provisioning,
+)
 
 
 def run_all() -> None:
-	"""Run every phase that takes a Server against one shared droplet.
+	"""Run every use case that takes a Server against one shared droplet.
 
 	The droplet is created once (or reused if an Active+reachable one already
-	exists), every phase runs against it with `keep=True`, and the last phase
-	flips `keep=False` so the `finally` block deletes it.
+	exists), every use case runs against it with `keep=True`, and the
+	`finally` block deletes it when we provisioned it ourselves.
 
-	Phases 1 and 2 (SSH primitive in isolation; DigitalOcean client smoke
-	test) are not orchestrated here — they own their own droplet semantics.
+	Use cases not orchestrated here:
+
+	- [ssh_primitive.run](./use_cases/ssh_primitive.py) — operator-provided
+	  droplet path; no DO state.
+	- [digitalocean_client.run](./use_cases/digitalocean_client.py) — owns
+	  its own throwaway droplet.
+	- [server_provisioning.run](./use_cases/server_provisioning.py) — owns
+	  the fresh-provision flow; folding it in would either tear down the
+	  shared droplet mid-run or dilute its contract.
 	"""
 	overall_start = time.monotonic()
 	client = get_client()
@@ -44,25 +60,24 @@ def run_all() -> None:
 
 	server, _client, created_now = ensure_bootstrapped_server(reuse=True, keep=True)
 
-	phases = [
-		("phase-4 (image sync)", phase_4.run),
-		("phase-5 (vm provision)", phase_5.run),
-		("phase-6 (vm lifecycle)", phase_6.run),
-		("phase-7 (run task + reboot)", phase_7.run),
-		("phase-8 (validation paths)", phase_8.run),
-		("phase-10 (sync background)", phase_10.run),
-		("phase-11 (ssh transport + bootstrap)", phase_11.run),
+	use_cases = [
+		("image-sync", image_sync.run),
+		("vm-provisioning", virtual_machine_provisioning.run),
+		("vm-lifecycle", virtual_machine_lifecycle.run),
+		("run-task", run_task.run),
+		("server-provisioning (validation)", server_provisioning.run_against_shared),
+		("ssh-primitive (transport+bootstrap)", ssh_primitive.run_against_shared),
 	]
 
 	results: list[tuple[str, str, float]] = []
 	try:
-		for label, runner in phases:
-			phase_start = time.monotonic()
+		for label, runner in use_cases:
+			use_case_start = time.monotonic()
 			try:
 				runner(reuse=True, keep=True)
-				results.append((label, "OK", time.monotonic() - phase_start))
+				results.append((label, "OK", time.monotonic() - use_case_start))
 			except Exception:
-				results.append((label, "FAIL", time.monotonic() - phase_start))
+				results.append((label, "FAIL", time.monotonic() - use_case_start))
 				traceback.print_exc()
 				break
 	finally:
@@ -73,7 +88,7 @@ def run_all() -> None:
 	print("")
 	print("=" * 60)
 	for label, outcome, seconds in results:
-		print(f"{label:<32} {outcome} in {seconds:.0f}s")
+		print(f"{label:<40} {outcome} in {seconds:.0f}s")
 	print(f"Total: {total:.0f}s. One droplet used{' + cleaned up' if created_now else ' (reused)'}.")
 	print("=" * 60)
 
@@ -85,25 +100,21 @@ def run_all() -> None:
 def run_all_coverage() -> None:
 	"""Run everything that contributes to e2e coverage in a single bench call.
 
-	Cost: three billable droplets. The shared droplet (used by phases 4-7,
-	10, 11), the phase-2 throwaway, and the phase-3 fresh-provision. Phase 3
-	is the only path that exercises `Server Provider.provision_server` and
-	`finish_provisioning`, so it must run if those modules are to be covered.
+	Cost: three billable droplets. The shared droplet (used by the
+	use cases orchestrated by `run_all`), the DigitalOcean-client round
+	trip's throwaway, and the server-provisioning fresh-provision flow's
+	droplet. Server-provisioning is the only path that hits
+	`Server Provider.provision_server` and `finish_provisioning` against a
+	fresh droplet, so it must run if those modules are to be covered.
 	"""
-	from atlas.tests.e2e import phase_2, phase_3
+	from atlas.tests.e2e.use_cases import digitalocean_client
 
-	# Phase 9 needs no droplet at all; run it first so a transient DO outage
-	# fails fast before we burn an hour bootstrapping.
-	print("--- phase 9 (DO client error paths) ---")
-	phase_9.run()
+	# digitalocean_client opens with a no-droplet smoke; run it first so a
+	# transient DO outage fails fast before we burn an hour bootstrapping.
+	print("--- digitalocean-client (smoke + round trip) ---")
+	digitalocean_client.run()
 
-	# Phase 2 uses its own droplet.
-	print("--- phase 2 (DO smoke test) ---")
-	phase_2.run()
+	print("--- server-provisioning (fresh provision) ---")
+	server_provisioning.run()
 
-	# Phase 3 also uses its own droplet (fresh provision).
-	print("--- phase 3 (fresh server provision) ---")
-	phase_3.run()
-
-	# The shared-droplet phases.
 	run_all()

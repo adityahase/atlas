@@ -1,5 +1,10 @@
 # Phase 1 — SSH plumbing + Task DocType
 
+> **Historical.** Implementation phases shipped iteration 1; this file is
+> preserved for context. The e2e tests that were originally written here
+> now live in [`use_cases/ssh_primitive.py`](../atlas/tests/e2e/use_cases/ssh_primitive.py).
+> The going-forward testing guideline is [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 Land the SSH execution module and the Task DocType. By the end of this phase,

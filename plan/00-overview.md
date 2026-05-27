@@ -103,28 +103,40 @@ Both paths funnel through `atlas/atlas/ssh.py::run_task()`. The decision of
 
 ### End-to-end tests
 
-Every phase ships a bench command:
+> **Going-forward guideline:** [e2e-testing.md](./e2e-testing.md). The
+> per-phase bench commands described below were how the suite was first
+> assembled; the suite is now grouped by **operator use case** under
+> [`atlas/tests/e2e/use_cases/`](../atlas/tests/e2e/use_cases). New tests
+> follow the use-case guideline, not the phase model.
+
+The historical phase-per-bench-command shape was:
 
 ```
-bench --site atlas.local execute atlas.tests.e2e.phase_N.run
+bench --site atlas.local execute atlas.tests.e2e.phase_N.run   # (historical)
 ```
 
-**Phase 1** runs against a droplet the operator has spun up by hand
-(connection in site config); no DO API access, no cleanup. See
-[phase-1-ssh-and-task.md](./phase-1-ssh-and-task.md#e2e).
-
-**Phases 2 onward** create their own throwaway droplets via the DO client.
 Each runner:
 
 1. Reads `atlas_do_token` from the site's `common_site_config.json`.
-2. **Pre-sweep**: lists droplets tagged `atlas-e2e` and deletes any older
-   than 30 minutes. Catches leaked droplets from crashed runs.
+2. **Pre-sweep**: lists droplets tagged `atlas-e2e` older than 30 minutes
+   and prints them (operator deletes by hand — the account also hosts
+   production droplets).
 3. Wraps the test body in `try/finally`; the `finally` deletes whatever
    droplets the run created, regardless of outcome.
 4. Asserts on `Task` rows (status, exit_code, stdout patterns).
-5. Prints a one-line summary: `phase-N: OK in 87s` or `phase-N: FAIL ...`.
+5. Prints a one-line summary: `<label>: OK in 87s` or `<label>: FAIL ...`.
 
 Tag every e2e-created droplet with `atlas-e2e` so the pre-sweep is safe.
+
+Today's entry points:
+
+```
+bench --site atlas.local execute atlas.tests.e2e.run_all
+bench --site atlas.local execute atlas.tests.e2e.run_all_coverage
+bench --site atlas.local execute atlas.tests.e2e.use_cases.<use_case>.run
+```
+
+See [e2e-testing.md](./e2e-testing.md) for the use-case map.
 
 ### Permissions
 
@@ -182,35 +194,50 @@ phase 8:
 - Bare-metal `Server Provider` type.
 - A `health-check` background job.
 
-## File tree at end of phase 8
+## File tree (current)
+
+The implementation file tree below reflects the state at the end of phase 8
+plus the post-iteration reorganization of the e2e suite. The e2e tree is
+the going-forward shape; see [e2e-testing.md](./e2e-testing.md) for the
+guideline.
 
 ```
 atlas/atlas/
 ├── atlas/                                  # the Atlas module
-│   ├── digitalocean.py                     # DO HTTP client (phase 2)
-│   ├── networking.py                       # IPv6 allocator (phase 5)
-│   ├── secrets.py                          # get_secret() (phase 1)
-│   ├── ssh.py                              # run_task, upload_files (phase 1)
+│   ├── digitalocean.py                     # DO HTTP client
+│   ├── networking.py                       # IPv6 allocator + derived MAC/tap
+│   ├── secrets.py                          # get_secret() indirection
+│   ├── ssh.py                              # run_task, upload_files (re-export shim)
+│   ├── _ssh/{runner,transport}.py
+│   ├── script_uploads.py
+│   ├── scripts_catalog.py
 │   └── doctype/
-│       ├── server/                         # phase 3
-│       ├── server_provider/                # phase 3
-│       ├── task/                           # phase 1
-│       ├── virtual_machine/                # phase 5/6
-│       └── virtual_machine_image/          # phase 4
+│       ├── server/
+│       ├── server_provider/
+│       ├── task/
+│       ├── virtual_machine/
+│       └── virtual_machine_image/
 ├── hooks.py
 ├── modules.txt
 └── tests/
     ├── __init__.py
     └── e2e/
-        ├── __init__.py
-        ├── _shared.py                      # tag, sweep, helpers
-        ├── phase_1.py
-        ├── phase_2.py
-        ├── phase_3.py
-        ├── phase_4.py
-        ├── phase_5.py
-        ├── phase_6.py
-        ├── phase_7.py
-        └── phase_8.py
-scripts/                                    # already exists, edited in phase 3
+        ├── __init__.py                     # run_all, run_all_coverage
+        ├── _config.py
+        ├── _droplets.py
+        ├── _image.py
+        ├── _inspect.py
+        ├── _shared.py                      # re-export shim
+        ├── _tasks.py
+        ├── scripts/                        # e2e-only probe / fail scripts
+        └── use_cases/                      # tests grouped by operator action
+            ├── __init__.py
+            ├── digitalocean_client.py
+            ├── image_sync.py
+            ├── run_task.py
+            ├── server_provisioning.py
+            ├── ssh_primitive.py
+            ├── virtual_machine_lifecycle.py
+            └── virtual_machine_provisioning.py
+scripts/                                    # uploaded over SSH and run on the host
 ```

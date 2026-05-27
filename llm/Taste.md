@@ -15,7 +15,7 @@ Guidelines for writing good code
 1. Scripts are the source of truth for server-side logic. Server-side logic lives in `scripts/*.sh`. Python calls scripts and parses their output. Do not encode server-side state machines in Python.
 1. Every shell script in `scripts/` must be idempotent. Retry = re-run, no special repair mode.
 1. Fail loud at the boundary; do not fall back. SSH failed? raise. DO API 5xx? raise. The operator retries by clicking the button.
-1. Tests live next to the code they cover. `atlas/atlas/doctype/<x>/test_<x>.py` for controllers, `atlas/tests/test_<module>.py` for modules, `atlas/tests/e2e/phase_N.py` for end-to-end.
+1. Tests live next to the code they cover. `atlas/atlas/doctype/<x>/test_<x>.py` for controllers, `atlas/tests/test_<module>.py` for modules, `atlas/tests/e2e/use_cases/<use_case>.py` for end-to-end (grouped by operator action — see [plan/e2e-testing.md](../plan/e2e-testing.md)).
 
 
 Refer to [Pilot, agent and deploy repositories in references](./references/README.md) for my personal taste and coding style.

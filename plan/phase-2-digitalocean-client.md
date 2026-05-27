@@ -1,5 +1,9 @@
 # Phase 2 — DigitalOcean API client
 
+> **Historical.** The e2e tests that lived here now live in
+> [`use_cases/digitalocean_client.py`](../atlas/tests/e2e/use_cases/digitalocean_client.py).
+> Going-forward testing guideline: [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 A tiny `requests`-based HTTP client for the four DigitalOcean endpoints Atlas

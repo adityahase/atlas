@@ -1,5 +1,9 @@
 # Phase 7 — Run-Task escape hatch + Task list polish
 
+> **Historical.** The e2e tests that lived here now live in
+> [`use_cases/run_task.py`](../atlas/tests/e2e/use_cases/run_task.py).
+> Going-forward testing guideline: [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 Land the "Run Task" dialog on Server (the escape hatch from

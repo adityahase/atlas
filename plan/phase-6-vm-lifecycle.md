@@ -1,5 +1,9 @@
 # Phase 6 — VM lifecycle: Start, Stop, Restart, Delete
 
+> **Historical.** The e2e tests that lived here now live in
+> [`use_cases/virtual_machine_lifecycle.py`](../atlas/tests/e2e/use_cases/virtual_machine_lifecycle.py).
+> Going-forward testing guideline: [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 Wire the remaining four buttons on Virtual Machine. The shell scripts already

@@ -1,5 +1,9 @@
 # Phase 3 — Server Provider + Server DocTypes (with bootstrap)
 
+> **Historical.** The e2e tests that lived here now live in
+> [`use_cases/server_provisioning.py`](../atlas/tests/e2e/use_cases/server_provisioning.py).
+> Going-forward testing guideline: [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 Two DocTypes (`Server Provider`, `Server`) and a working **Provision Server**

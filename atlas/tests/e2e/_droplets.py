@@ -158,11 +158,16 @@ def ensure_e2e_provider() -> "frappe.model.document.Document":
 
 @contextmanager
 def phase(label: str, reuse: bool = True, keep: bool = True):
-	"""Scaffolding for phases 4-7: bootstrap, sweep, time, format, cleanup.
+	"""Scaffolding for use-case modules that need a bootstrapped server.
 
-	Wraps the per-phase boilerplate: `ensure_bootstrapped_server`, the leaked-
-	droplet pre-sweep, the OK/FAIL one-line summary, the traceback on failure,
-	and the per-run droplet cleanup when `keep=False`. Yields the Server doc.
+	Wraps the per-use-case boilerplate: `ensure_bootstrapped_server`, the
+	leaked-droplet pre-sweep, the OK/FAIL one-line summary, the traceback on
+	failure, and the per-run droplet cleanup when `keep=False`. Yields the
+	Server doc.
+
+	The name `phase` is historical — it survives because operators may still
+	have `bench execute atlas.tests.e2e._shared.phase` muscle memory. New
+	callers can read it as "scope this use case".
 	"""
 	start_clock = time.monotonic()
 	server, client, created_now = ensure_bootstrapped_server(reuse=reuse, keep=keep)

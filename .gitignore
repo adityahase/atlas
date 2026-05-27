@@ -58,3 +58,4 @@ jspm_packages/
 .coverage
 .coverage*
 .coveragerc
+coverage*.xml

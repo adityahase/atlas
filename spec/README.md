@@ -63,3 +63,33 @@ discoveries is preserved as project history.
 7. [Filesystem layout on the server](./07-filesystem-layout.md)
 8. [Images](./08-images.md)
 9. [Roadmap and deferred decisions](./09-roadmap.md)
+
+## Operator use cases
+
+Everything Atlas does for an operator falls into one of seven use cases.
+The list is the spec's index of operator-visible behavior; the e2e suite
+mirrors it exactly (one module per use case, see
+[`atlas/tests/e2e/use_cases/`](../atlas/tests/e2e/use_cases)). New
+operator-facing features add to this list; new tests follow it.
+
+| Use case                       | Operator action                                         | Spec |
+| ------------------------------ | ------------------------------------------------------- | ---- |
+| Provision a server             | `Server Provider` → **Provision Server**                | [03-bootstrapping.md](./03-bootstrapping.md) |
+| Sync an image to a server      | `Virtual Machine Image` → **Sync to Server / All**      | [08-images.md](./08-images.md) |
+| Provision a virtual machine    | `Virtual Machine` → **Provision**                       | [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md) |
+| Operate a virtual machine      | `Virtual Machine` → **Start / Stop / Restart / Terminate** | [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md) |
+| Run an ad-hoc task / reboot    | `Server` → **Run Task / Reboot**                        | [04-tasks.md](./04-tasks.md) |
+| Talk to DigitalOcean           | (internal) verify the DO HTTP client                    | [01-architecture.md](./01-architecture.md) |
+| Run a script over SSH directly | (internal) `run_task(connection=…)` before a `Server` row exists | [04-tasks.md](./04-tasks.md) |
+
+The last two are internal contracts the higher use cases depend on; they
+have their own e2e modules because they fail in different ways than the
+operator-facing flows do.
+
+## Testing
+
+E2E tests are grouped by the use cases above, not by implementation phase.
+Each module owns the happy path, the operator-visible negative paths, and
+the DocType-level validation throws that guard the same method.
+[`plan/e2e-testing.md`](../plan/e2e-testing.md) is the going-forward
+guideline; the historical phase-by-phase plan files are kept for context.

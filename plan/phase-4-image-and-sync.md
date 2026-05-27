@@ -1,5 +1,9 @@
 # Phase 4 — Virtual Machine Image + sync-image
 
+> **Historical.** The e2e tests that lived here now live in
+> [`use_cases/image_sync.py`](../atlas/tests/e2e/use_cases/image_sync.py).
+> Going-forward testing guideline: [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 A `Virtual Machine Image` DocType and a working **Sync to Server** /

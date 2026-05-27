@@ -1,5 +1,11 @@
 # Phase 8 — Permissions, docs, and handoff
 
+> **Historical.** The negative-path e2e tests this phase added are now
+> folded across the use-case modules in
+> [`atlas/tests/e2e/use_cases/`](../atlas/tests/e2e/use_cases) — each
+> validation throw lives with the use case it guards. Going-forward
+> testing guideline: [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 Lock down permissions, write the README that points future contributors

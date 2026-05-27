@@ -42,11 +42,16 @@ After `bench install-app atlas` and creating an `atlas.local` site:
        bench --site atlas.local execute atlas.tests.e2e.run_all
 
 The run takes ~9 minutes and creates exactly one billable droplet (reused
-across phases 4–7, deleted when the run ends). Phases 2 and 3 own their own
-dedicated-droplet flows and are invoked directly:
+across the shared-server use cases, deleted when the run ends). The
+dedicated-droplet use cases own their own provision/teardown semantics and
+are invoked directly:
 
-       bench --site atlas.local execute atlas.tests.e2e.phase_2.run
-       bench --site atlas.local execute atlas.tests.e2e.phase_3.run
+       bench --site atlas.local execute atlas.tests.e2e.use_cases.digitalocean_client.run
+       bench --site atlas.local execute atlas.tests.e2e.use_cases.server_provisioning.run
+       bench --site atlas.local execute atlas.tests.e2e.use_cases.ssh_primitive.run
+
+E2E tests are grouped by operator use case under [atlas/tests/e2e/use_cases/](./atlas/tests/e2e/use_cases/);
+the going-forward guideline is in [plan/e2e-testing.md](./plan/e2e-testing.md).
 
 ## Contributing
 

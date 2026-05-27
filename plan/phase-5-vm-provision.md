@@ -1,5 +1,9 @@
 # Phase 5 — Virtual Machine DocType (Provision only)
 
+> **Historical.** The e2e tests that lived here now live in
+> [`use_cases/virtual_machine_provisioning.py`](../atlas/tests/e2e/use_cases/virtual_machine_provisioning.py).
+> Going-forward testing guideline: [e2e-testing.md](./e2e-testing.md).
+
 ## Goal
 
 Add the `Virtual Machine` DocType with autoname UUID, derived MAC and TAP
