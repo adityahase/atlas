@@ -133,13 +133,15 @@ function render_sibling_tasks(frm) {
 	}).then((rows) => {
 		if (!rows.length) return;
 		const list = rows.map((row) => {
-			const ago = frappe.datetime.comment_when(row.modified);
+			// `comment_when` returns an HTML <span> with relative-time tooltip;
+			// inline it directly so the markup isn't re-escaped.
+			const ago_html = frappe.datetime.comment_when(row.modified);
 			const status_label = row.status || "—";
 			const title = row.subject || row.name;
 			return `<li>
 				<span class="indicator-pill ${indicator_class(row.status)}">${frappe.utils.escape_html(status_label)}</span>
 				<a href="/app/task/${encodeURIComponent(row.name)}">${frappe.utils.escape_html(title)}</a>
-				<span class="text-muted small">${frappe.utils.escape_html(ago)}</span>
+				${ago_html}
 			</li>`;
 		}).join("");
 		const html = `

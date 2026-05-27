@@ -57,6 +57,7 @@ class Task(Document):
 
 	def on_update(self) -> None:
 		self._publish_update()
+		self._propagate_status_to_virtual_machine()
 
 	@frappe.whitelist()
 	def retry(self) -> str:
@@ -118,6 +119,31 @@ class Task(Document):
 		for field in IMMUTABLE_AFTER_INSERT:
 			if getattr(self, field) != getattr(original, field):
 				frappe.throw(f"{field} is read-only after insert")
+
+	def _propagate_status_to_virtual_machine(self) -> None:
+		"""Flip VM status to Failed when its provision Task ends in Failure.
+
+		The VM controller's `provision()` only saves `Running` *after* run_task
+		returns. On a raised exception the row is unchanged (still Pending).
+		Without this hook, an operator looking at the VM form sees Pending and
+		has no clue the last provision attempt blew up.
+		"""
+		if (
+			self.status != "Failure"
+			or self.script != "provision-vm.sh"
+			or not self.virtual_machine
+		):
+			return
+		current = frappe.db.get_value("Virtual Machine", self.virtual_machine, "status")
+		if current not in ("Pending", "Running"):
+			return
+		frappe.db.set_value("Virtual Machine", self.virtual_machine, "status", "Failed")
+		frappe.publish_realtime(
+			event="virtual_machine_update",
+			message={"name": self.virtual_machine, "status": "Failed"},
+			doctype="Virtual Machine",
+			docname=self.virtual_machine,
+		)
 
 	def _publish_update(self) -> None:
 		payload = {

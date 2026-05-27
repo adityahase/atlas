@@ -79,10 +79,10 @@ Atlas / Task / Provision VM · verify vnet_hdr fix on bootstrap-server-177987980
   existing rows.
 
 **Implementation status (landed):** §1, §2 (headline, chips, retry,
-sibling-tasks), §3 (enlarged Code-field panes), and §4 (realtime
+sibling-tasks), §3 (enlarged Code-field panes), §4 (realtime
 `task_update` event on after_insert / on_update with the Task form
-auto-reloading) are wired. §5 (VM status repair on provision failure)
-is deferred.
+auto-reloading), and §5 (VM status repair on provision failure plus
+Pending/Failed intro linking to the last-failure Task) are wired.
 
 ### Fighting Desk?
 No. `title_field` is the documented way to do this.
@@ -430,6 +430,30 @@ flip from Pending → Running → Failed without refreshing.
 - Controller status transition on Failure.
 - `publish_realtime("virtual_machine_update", {name, status})` from
   the Task lifecycle hook.
+
+**Implementation status (landed):** §5 is wired.
+[Task.on_update](../../atlas/atlas/doctype/task/task.py#L57) now calls
+`_propagate_status_to_virtual_machine()` — when a Task transitions to
+`Failure` with `script = provision-vm.sh` and a linked VM, the VM's
+status is flipped from `Pending`/`Running` to `Failed` via
+`frappe.db.set_value` and a `virtual_machine_update` realtime event
+fires for any open VM form. The VM client script subscribes to the
+event (and to `task_update` events with a matching VM) and reloads.
+For `Pending`/`Failed` VMs, the client also queries the last
+Failure-status `provision-vm.sh` Task for this VM and renders a red
+intro: "Last Provision attempt failed — `<task subject>` →. Fix the
+cause, then click Provision to retry."
+
+**Drift note:** The deferred-spec version called for the VM's
+`provision()` method to wrap `run_task` in try/except and set
+`status = Failed` itself. That couples lifecycle state to the runner —
+and `run_task` already raises `ValidationError` on failure, which
+short-circuits the controller before any post-task save. Routing the
+status flip through the Task's `on_update` lifecycle keeps the runner
+unchanged and means failures from the background-job execution path
+(`atlas.atlas.ssh.execute_task`) also propagate correctly. The VM test
+suite (`test_provision_failure_flips_status_to_failed`) covers the new
+shape.
 
 ### Fighting Desk?
 No.

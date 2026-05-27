@@ -69,21 +69,42 @@ class TestVirtualMachine(IntegrationTestCase):
 		mocked.assert_called_once()
 		self.assertEqual(mocked.call_args.kwargs["script"], "provision-vm.sh")
 
-	def test_provision_failure_leaves_status_pending(self) -> None:
-		"""On failure the row is not mutated (Pilot shape). Task row carries
-		the failure; operator re-clicks Provision (scripts are idempotent)."""
+	def test_provision_failure_flips_status_to_failed(self) -> None:
+		"""On failure the Task is saved with `Failure`; the Task controller
+		hook then flips the linked VM's status to `Failed` so the form makes
+		the failed attempt visible. The operator re-clicks Provision (scripts
+		are idempotent) to retry."""
+		from atlas.atlas.doctype.task.task import Task
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
 		vm = _new_vm()
-		with patch.object(
-			module,
-			"run_task",
-			side_effect=frappe.ValidationError("provision broke"),
-		):
+
+		def fake_run_task(**kwargs):
+			# Mimic the real `run_task`: insert a Task row, mark it Failure,
+			# raise. The on_update hook on the Task then propagates Failed
+			# to the linked VM.
+			task = frappe.get_doc({
+				"doctype": "Task",
+				"server": kwargs["server"],
+				"virtual_machine": kwargs.get("virtual_machine"),
+				"script": kwargs["script"],
+				"status": "Pending",
+				"triggered_by": "Administrator",
+			})
+			import json as _json
+			task.variables = _json.dumps(kwargs.get("variables") or {})
+			task.insert(ignore_permissions=True)
+			task.status = "Failure"
+			task.stderr = "provision broke"
+			task.exit_code = 1
+			task.save(ignore_permissions=True)
+			raise frappe.ValidationError("provision broke")
+
+		with patch.object(module, "run_task", side_effect=fake_run_task):
 			with self.assertRaises(frappe.ValidationError):
 				vm.provision()
 		vm.reload()
-		self.assertEqual(vm.status, "Pending")
+		self.assertEqual(vm.status, "Failed")
 
 	def test_provision_rejects_from_running(self) -> None:
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
