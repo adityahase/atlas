@@ -123,7 +123,9 @@ def finish_provisioning(server_name: str) -> None:
 		)
 		server.ipv4_address = public_ipv4(droplet)
 		server.ipv6_address, server.ipv6_prefix = public_ipv6(droplet)
-		server.ipv6_virtual_machine_range = carve_virtual_machine_range(server.ipv6_prefix)
+		server.ipv6_virtual_machine_range = carve_virtual_machine_range(
+			server.ipv6_address, server.ipv6_prefix
+		)
 
 	server.status = "Bootstrapping"
 	server.save(ignore_permissions=True)

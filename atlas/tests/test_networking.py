@@ -52,14 +52,22 @@ def _insert_vm(server: str, address: str, status: str = "Pending") -> str:
 
 class TestNetworking(IntegrationTestCase):
 	def test_carve_virtual_machine_range(self) -> None:
+		# /124 around the host address, not the start of the /64. DO routes
+		# the /124 that contains the droplet's own IPv6 — addresses outside
+		# that /124 are unreachable from the internet.
 		self.assertEqual(
-			carve_virtual_machine_range("2001:db8::/64"),
+			carve_virtual_machine_range(
+				"2400:6180:100:d0:0:1:4ae1:d001",
+				"2400:6180:100:d0::/64",
+			),
+			"2400:6180:100:d0:0:1:4ae1:d000/124",
+		)
+		self.assertEqual(
+			carve_virtual_machine_range("2001:db8::1", "2001:db8::/64"),
 			"2001:db8::/124",
 		)
-		self.assertEqual(
-			carve_virtual_machine_range("2a03:b0c0:abcd:1234::/64"),
-			"2a03:b0c0:abcd:1234::/124",
-		)
+		with self.assertRaises(ValueError):
+			carve_virtual_machine_range("2001:db8::1", "2a03::/64")
 
 	def test_derive_mac_stable(self) -> None:
 		name = str(uuid.uuid4())

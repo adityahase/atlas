@@ -18,6 +18,14 @@ holds:
 Image bytes never live in the Frappe DB. They live as files on each server
 and as a URL anywhere else.
 
+The canonical values for the supported Ubuntu 24.04 image (URLs,
+filenames, SHA-256s) live as a `DEFAULT_IMAGE` constant in
+[`atlas/bootstrap.py`](../atlas/bootstrap.py) and
+[`atlas/tests/e2e/_config.py`](../atlas/tests/e2e/_config.py). New
+operators should copy that dict into the form rather than typing seven
+hex-and-URL fields by hand; `atlas.bootstrap.run` inserts the row
+directly.
+
 ## Sync to a server
 
 One Task per server-image pair, running

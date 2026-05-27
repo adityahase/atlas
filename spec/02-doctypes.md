@@ -56,6 +56,22 @@ required when `provider_type = DigitalOcean` and otherwise left blank.
 Self-Managed rows that accidentally carry a DO field are not rejected —
 the field is ignored.
 
+Concrete examples for a fresh `DigitalOcean` row: `default_region = blr1`,
+`default_size = s-2vcpu-4gb-intel` (any size that supports nested
+virtualisation works), `default_image = ubuntu-24-04-x64`. `ssh_key_id`
+is the SHA-256 fingerprint of the SSH key already registered in your DO
+account — get it from `doctl compute ssh-key list` or the DO control
+panel. `ssh_private_key` is the matching PEM-format private key Atlas
+SSHes in with as `root`.
+
+For `Self-Managed`, all four networking inputs to the **Provision
+Server** dialog are operator-supplied: `ipv4_address` is the SSH
+endpoint, `ipv6_address` is whatever the host answers on, `ipv6_prefix`
+is the full prefix routed to the host (typically `/64`), and
+`ipv6_virtual_machine_range` is the subnet Atlas is allowed to allocate
+VM addresses from. The split between the latter two is explained in the
+`Server` section below.
+
 ### Form layout
 
 ```
@@ -211,6 +227,10 @@ VM in lists. Optional but recommended; it's the form's title field.
 methods (Provision/Start/Stop/Restart/Terminate); see
 [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md).
 
+`ssh_public_key` is the key injected into the *guest's*
+`/root/.ssh/authorized_keys` — it is how the operator SSHes into the
+VM, not into the host. The host key lives on the `Server Provider`.
+
 ### Form layout
 
 ```
@@ -292,6 +312,13 @@ rootfs_filename
 - Columns (left to right): `image_name`, `description`,
   `default_disk_gigabytes`, `is_active`.
 - Standard filters: `is_active`.
+
+A first-time operator does not need to invent any of these values. The
+Firecracker CI Ubuntu 24.04 image constants live in
+[`atlas/bootstrap.py`](../atlas/bootstrap.py) as `DEFAULT_IMAGE` and in
+[`atlas/tests/e2e/_config.py`](../atlas/tests/e2e/_config.py) as
+`DEFAULT_IMAGE`. Copy them into the form, or run `atlas.bootstrap.run`
+which inserts the row for you. See [08-images.md](./08-images.md).
 
 ### Buttons
 

@@ -65,6 +65,29 @@ keep it the source of truth.
 8. [Images](./08-images.md)
 9. [Roadmap and deferred decisions](./09-roadmap.md)
 
+## First run on a fresh site
+
+The operator-visible setup order on the desk is:
+
+1. **Server Provider** — credentials and defaults for one source of servers.
+2. **Server** — provisioned by clicking **Provision Server** on a provider.
+3. **Virtual Machine Image** — the kernel + rootfs pair to install.
+4. **Virtual Machine** — created against a Server and an Image, then
+   **Provision**ed.
+
+To skip the clicking and stand up provider → server → image → VM in one
+shot, run [`atlas/bootstrap.py`](../atlas/bootstrap.py):
+
+```
+bench --site <site> execute atlas.bootstrap.run
+```
+
+It reads everything from site config (`atlas_provider_type`,
+`atlas_do_token`, `atlas_ssh_key_id`, …) and uses only the same
+whitelisted methods the desk buttons call. Requires a `bench worker`
+running because `provision_server` and `sync_to_server` both enqueue
+background jobs. The file's docstring lists every config key.
+
 ## Operator use cases
 
 Everything Atlas does for an operator falls into one of eight use cases.

@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStartPre=/bin/rm -f /var/lib/atlas/run/%i.sock
-ExecStartPost=/var/lib/atlas/bin/vm-network-up.sh %i
+ExecStartPre=/var/lib/atlas/bin/vm-network-up.sh %i
 ExecStart=/usr/local/bin/firecracker \
     --api-sock /var/lib/atlas/run/%i.sock \
     --config-file /var/lib/atlas/virtual-machines/%i/firecracker.json

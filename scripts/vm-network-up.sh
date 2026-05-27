@@ -1,5 +1,6 @@
 #!/bin/bash
-# Host-side network for a VM. Invoked by ExecStartPost in the systemd unit.
+# Host-side network for a VM. Invoked by ExecStartPre in the systemd unit
+# (must run before firecracker's ExecStart so the tap exists with vnet_hdr).
 # Reads /var/lib/atlas/virtual-machines/$1/network.env. Idempotent.
 #
 # Approach: the server has DigitalOcean's /64 prefix routed to it, but only a
@@ -34,7 +35,7 @@ sudo sysctl -q -w net.ipv6.conf.all.forwarding=1 net.ipv6.conf.all.proxy_ndp=1 |
 
 # Tap device: clean re-create so a restart picks up correct state.
 sudo ip link del "$TAP_DEVICE" 2>/dev/null || true
-sudo ip tuntap add "$TAP_DEVICE" mode tap
+sudo ip tuntap add "$TAP_DEVICE" mode tap vnet_hdr
 sudo ip link set "$TAP_DEVICE" up
 sudo ip -6 addr add fe80::1/64 dev "$TAP_DEVICE" nodad
 

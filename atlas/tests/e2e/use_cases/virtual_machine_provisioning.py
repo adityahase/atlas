@@ -171,7 +171,9 @@ def _check_networking_helpers() -> None:
 		derive_tap,
 	)
 
-	cidr = carve_virtual_machine_range("2604:a880:cad:d0::/64")
+	cidr = carve_virtual_machine_range(
+		"2604:a880:cad:d0:0:1:4ae1:d001", "2604:a880:cad:d0::/64"
+	)
 	assert cidr.endswith("/124"), cidr
 
 	sample_uuid = "550e8400-e29b-41d4-a716-446655440000"

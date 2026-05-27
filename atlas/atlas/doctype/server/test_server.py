@@ -12,12 +12,16 @@ from atlas.tests.fixtures import make_provider, make_server
 class TestNetworking(IntegrationTestCase):
 	def test_carve_virtual_machine_range(self) -> None:
 		self.assertEqual(
-			carve_virtual_machine_range("2a03:b0c0:abcd:1234::/64"),
+			carve_virtual_machine_range(
+				"2a03:b0c0:abcd:1234::1", "2a03:b0c0:abcd:1234::/64"
+			),
 			"2a03:b0c0:abcd:1234::/124",
 		)
 		self.assertEqual(
-			carve_virtual_machine_range("2001:db8::/64"),
-			"2001:db8::/124",
+			carve_virtual_machine_range(
+				"2400:6180:100:d0:0:1:4ae1:d001", "2400:6180:100:d0::/64"
+			),
+			"2400:6180:100:d0:0:1:4ae1:d000/124",
 		)
 
 

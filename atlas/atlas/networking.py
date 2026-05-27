@@ -6,15 +6,19 @@ import uuid
 import frappe
 
 
-def carve_virtual_machine_range(prefix_cidr: str) -> str:
-	"""Return the first /124 of the given /64.
+def carve_virtual_machine_range(host_address: str, prefix_cidr: str) -> str:
+	"""Return the /124 inside `prefix_cidr` that contains `host_address`.
 
-	DigitalOcean assigns a /64 to each droplet but only the first /124 is
-	routable inside DO's fabric. We hand out addresses inside that /124 only.
+	DigitalOcean assigns a /64 to each droplet but only the /124 around the
+	host's own address is routable inside DO's fabric — addresses elsewhere
+	in the /64 are dropped at the upstream edge. We hand out addresses
+	inside that /124 only.
 	"""
 	network = ipaddress.IPv6Network(prefix_cidr, strict=False)
-	first_124 = ipaddress.IPv6Network(f"{network.network_address}/124", strict=False)
-	return str(first_124)
+	host = ipaddress.IPv6Address(host_address)
+	if host not in network:
+		raise ValueError(f"{host_address} is not inside {prefix_cidr}")
+	return str(ipaddress.IPv6Network(f"{host_address}/124", strict=False))
 
 
 def derive_mac(virtual_machine_name: str) -> str:

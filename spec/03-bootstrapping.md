@@ -80,6 +80,13 @@ appear on stderr of the task because we run the SSH wrapper with `-x`.
 **Provision Server** button. Both provider types funnel into the same
 `finish_provisioning` step that actually runs bootstrap.
 
+`finish_provisioning` is enqueued (`frappe.enqueue(..., queue="long")`),
+not run inline. The button returns the moment the `Server` row is
+inserted — a `bench worker` must be running for the row to leave
+`Pending`. With no worker, the Server stays `Pending` forever and there
+is no UI signal that anything is wrong. The same applies to
+`Virtual Machine Image.sync_to_server` (see [08-images.md](./08-images.md)).
+
 ### DigitalOcean
 
 Signature: `provision_server(server_name)`. Sync for the cheap part,
