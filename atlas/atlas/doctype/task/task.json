@@ -154,20 +154,22 @@
    "fieldtype": "Code",
    "label": "Stdout",
    "options": "Text",
-   "read_only": 1
+   "read_only": 1,
+   "min_lines": 24
   },
   {
    "fieldname": "stderr",
    "fieldtype": "Code",
    "label": "Stderr",
    "options": "Text",
-   "read_only": 1
+   "read_only": 1,
+   "min_lines": 24
   }
  ],
  "in_create": 0,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-05-27 00:00:00.000000",
+ "modified": "2026-05-28 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Atlas",
  "name": "Task",

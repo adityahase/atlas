@@ -13,6 +13,14 @@ frappe.atlas.add_primary = function (frm, label, fn) {
 	} else {
 		frm.change_custom_button_type(labelled, null, "primary");
 	}
+	// One primary per page: Desk paints Save as solid `.btn-primary` on every
+	// refresh, which competes with the Atlas lifecycle hero. Demote Save to
+	// outline for this refresh cycle — the next `frm.page.set_primary_action`
+	// call will re-promote it on the no-primary path.
+	const $save = frm.page && frm.page.btn_primary;
+	if ($save && $save.length) {
+		$save.removeClass("btn-primary").addClass("btn-default");
+	}
 };
 
 frappe.atlas.add_secondary = function (frm, label, fn) {
@@ -46,10 +54,6 @@ frappe.atlas.add_success = function (frm, label, fn) {
 	if ($btn && $btn.addClass) {
 		$btn.addClass("atlas-tonal-success");
 	}
-};
-
-frappe.atlas.confirm_cost = function ({title, body_html, proceed_label, proceed}) {
-	return frappe.warn(title, body_html, proceed, proceed_label, true);
 };
 
 frappe.atlas.confirm_destructive = function ({
