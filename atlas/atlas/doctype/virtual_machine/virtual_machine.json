@@ -7,31 +7,39 @@
  "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
+  "tab_overview",
   "description",
   "server",
   "image",
   "column_break_header",
   "status",
   "section_break_resources",
+  "size_preset",
+  "column_break_resources_0",
   "vcpus",
   "column_break_resources_1",
   "memory_megabytes",
   "column_break_resources_2",
   "disk_gigabytes",
-  "section_break_access",
+  "tab_networking",
   "ssh_public_key",
-  "ssh_command_html",
+  "ssh_command",
   "section_break_networking",
   "ipv6_address",
   "column_break_networking",
   "mac_address",
   "tap_device",
-  "section_break_activity",
+  "tab_activity",
   "last_started",
   "column_break_activity",
   "last_stopped"
  ],
  "fields": [
+  {
+   "fieldname": "tab_overview",
+   "fieldtype": "Tab Break",
+   "label": "Overview"
+  },
   {
    "fieldname": "description",
    "fieldtype": "Data",
@@ -78,6 +86,18 @@
    "label": "Resources"
   },
   {
+   "default": "Custom",
+   "fieldname": "size_preset",
+   "fieldtype": "Select",
+   "label": "Size preset",
+   "no_copy": 1,
+   "options": "Custom\nSmall (1 vCPU / 512 MB / 4 GB)\nMedium (2 vCPU / 2048 MB / 10 GB)\nLarge (4 vCPU / 8192 MB / 40 GB)"
+  },
+  {
+   "fieldname": "column_break_resources_0",
+   "fieldtype": "Column Break"
+  },
+  {
    "default": "1",
    "fieldname": "vcpus",
    "fieldtype": "Int",
@@ -107,6 +127,11 @@
    "reqd": 1
   },
   {
+   "fieldname": "tab_networking",
+   "fieldtype": "Tab Break",
+   "label": "Networking"
+  },
+  {
    "fieldname": "section_break_access",
    "fieldtype": "Section Break",
    "label": "Access"
@@ -118,15 +143,17 @@
    "reqd": 1
   },
   {
-   "fieldname": "ssh_command_html",
-   "fieldtype": "HTML",
-   "label": "SSH Command"
+   "description": "IPv6 is the only stable identifier outside the desk.",
+   "fieldname": "ssh_command",
+   "fieldtype": "Code",
+   "is_virtual": 1,
+   "label": "SSH command",
+   "read_only": 1
   },
   {
    "fieldname": "section_break_networking",
    "fieldtype": "Section Break",
-   "collapsible": 1,
-   "label": "Networking"
+   "label": "Addresses"
   },
   {
    "fieldname": "ipv6_address",
@@ -152,9 +179,8 @@
    "read_only": 1
   },
   {
-   "fieldname": "section_break_activity",
-   "fieldtype": "Section Break",
-   "collapsible": 1,
+   "fieldname": "tab_activity",
+   "fieldtype": "Tab Break",
    "label": "Activity"
   },
   {

@@ -1,5 +1,5 @@
 {
- "color": "#d97706",
+ "color": "var(--orange-500)",
  "creation": "2026-05-27 00:00:00.000000",
  "docstatus": 0,
  "doctype": "Number Card",

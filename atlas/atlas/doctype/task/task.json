@@ -7,6 +7,7 @@
  "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
+  "tab_overview",
   "subject",
   "server",
   "virtual_machine",
@@ -22,11 +23,16 @@
   "ended",
   "section_break_inputs",
   "variables",
-  "section_break_output",
+  "tab_output",
   "stdout",
   "stderr"
  ],
  "fields": [
+  {
+   "fieldname": "tab_overview",
+   "fieldtype": "Tab Break",
+   "label": "Overview"
+  },
   {
    "fieldname": "subject",
    "fieldtype": "Data",
@@ -138,8 +144,8 @@
    "reqd": 1
   },
   {
-   "fieldname": "section_break_output",
-   "fieldtype": "Section Break",
+   "fieldname": "tab_output",
+   "fieldtype": "Tab Break",
    "label": "Output"
   },
   {

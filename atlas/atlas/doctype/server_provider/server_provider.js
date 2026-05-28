@@ -50,6 +50,10 @@ function paint_credential_indicator(frm, result) {
 
 
 function run_test_connection(frm) {
+	frappe.show_alert({
+		message: __("Testing connection…"),
+		indicator: "blue",
+	});
 	frm.call("test_connection").then(({message}) => {
 		frappe.show_alert({
 			message: __("OK: {0}", [message.email]),

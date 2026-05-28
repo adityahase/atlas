@@ -162,16 +162,16 @@ def _check_server_buttons(server) -> None:
 	assert task.status == "Success", task.stderr
 
 	# get_scripts: the desk picker only exposes the operator-visible subset
-	# (bootstrap-server / reboot-server / sync-image). Lifecycle scripts that
-	# must run from a VM/Image controller are filtered out so the operator
-	# can't fire terminate-vm.sh with empty variables from this menu.
+	# (sync-image). Lifecycle scripts that must run from a VM/Image
+	# controller are filtered out so the operator can't fire terminate-vm.sh
+	# with empty variables from this menu. Bootstrap and reboot have their
+	# own dedicated top-bar buttons with confirmation guards.
 	scripts = _call_button("Server", server.name, "get_scripts")
 	assert isinstance(scripts, list) and scripts, scripts
-	assert "bootstrap-server.sh" in scripts, scripts
-	assert "reboot-server.sh" in scripts, scripts
-	assert "sync-image.sh" in scripts, scripts
-	for hidden in ("provision-vm.sh", "start-vm.sh", "stop-vm.sh", "terminate-vm.sh"):
-		assert hidden not in scripts, f"{hidden} leaked into operator-visible scripts: {scripts}"
+	names = {entry["name"] for entry in scripts}
+	assert "sync-image.sh" in names, names
+	for hidden in ("bootstrap-server.sh", "reboot-server.sh", "provision-vm.sh", "start-vm.sh", "stop-vm.sh", "terminate-vm.sh"):
+		assert hidden not in names, f"{hidden} leaked into operator-visible scripts: {names}"
 
 	# Run Task dialog happy path. The Code field posts `variables` as a
 	# JSON string, not a dict — drive that branch explicitly.

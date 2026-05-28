@@ -16,7 +16,7 @@ frappe.ui.form.on("Task", {
 		render_chips(frm);
 		add_retry_button(frm);
 		render_sibling_tasks(frm);
-		enlarge_log_panes(frm);
+		pretty_print_variables(frm);
 		subscribe_to_realtime(frm);
 	},
 	onload(frm) {
@@ -76,8 +76,9 @@ function render_chips(frm) {
 	const dashboard = frm.dashboard;
 	if (!dashboard || !dashboard.add_indicator) return;
 	if (frm.doc.server) {
+		const href = `/app/server/${encodeURIComponent(frm.doc.server)}`;
 		dashboard.add_indicator(
-			`Server: ${frappe.utils.escape_html(frm.doc.server)}`,
+			`Server: <a href="${href}">${frappe.utils.escape_html(frm.doc.server)}</a>`,
 			"blue",
 		);
 	}
@@ -85,8 +86,9 @@ function render_chips(frm) {
 		frappe.db.get_value("Virtual Machine", frm.doc.virtual_machine, "description")
 			.then(({message}) => {
 				const description = message?.description || frm.doc.virtual_machine.slice(0, 8);
+				const href = `/app/virtual-machine/${encodeURIComponent(frm.doc.virtual_machine)}`;
 				dashboard.add_indicator(
-					`VM: ${frappe.utils.escape_html(description)}`,
+					`VM: <a href="${href}">${frappe.utils.escape_html(description)}</a>`,
 					"blue",
 				);
 			});
@@ -113,71 +115,47 @@ function add_retry_button(frm) {
 
 
 function render_sibling_tasks(frm) {
-	const subject_field = frm.fields_dict.subject;
-	if (!subject_field) return;
-
-	const filter = frm.doc.virtual_machine
-		? {virtual_machine: frm.doc.virtual_machine}
+	const filter_field = frm.doc.virtual_machine
+		? "virtual_machine"
 		: frm.doc.server
-			? {server: frm.doc.server}
+			? "server"
 			: null;
-	if (!filter) return;
-
-	filter.name = ["!=", frm.doc.name];
-
-	frappe.db.get_list("Task", {
-		fields: ["name", "subject", "status", "modified"],
-		filters: filter,
-		order_by: "modified desc",
-		limit: 5,
-	}).then((rows) => {
-		if (!rows.length) return;
-		const list = rows.map((row) => {
-			// `comment_when` returns an HTML <span> with relative-time tooltip;
-			// inline it directly so the markup isn't re-escaped.
-			const ago_html = frappe.datetime.comment_when(row.modified);
-			const status_label = row.status || "—";
-			const title = row.subject || row.name;
-			return `<li>
-				<span class="indicator-pill ${indicator_class(row.status)}">${frappe.utils.escape_html(status_label)}</span>
-				<a href="/app/task/${encodeURIComponent(row.name)}">${frappe.utils.escape_html(title)}</a>
-				${ago_html}
-			</li>`;
-		}).join("");
-		const html = `
-			<div class="form-section atlas-sibling-tasks">
-				<div class="section-head text-uppercase text-muted small mb-2">${__("Sibling tasks")}</div>
-				<ul class="list-unstyled">${list}</ul>
-			</div>
-		`;
-		frm.dashboard.add_section(html, "sibling-tasks");
+	if (!filter_field) return;
+	const wrapper_id = "atlas-sibling-tasks";
+	frm.dashboard.wrapper?.find(`#${wrapper_id}`).remove();
+	const $section = $(`<div id="${wrapper_id}"></div>`);
+	frm.dashboard.add_section($section, __("Sibling Tasks"));
+	frappe.widget.make_widget({
+		widget_type: "quick_list",
+		document_type: "Task",
+		label: __("Sibling Tasks"),
+		quick_list_filter: JSON.stringify([
+			[filter_field, "=", frm.doc[filter_field]],
+			["name", "!=", frm.doc.name],
+		]),
+		container: $section,
+		options: {},
 	});
 }
 
 
-function indicator_class(status) {
-	return {
-		Pending: "orange",
-		Running: "yellow",
-		Success: "green",
-		Failure: "red",
-	}[status] || "grey";
-}
-
-
-function enlarge_log_panes(frm) {
-	for (const fieldname of ["stdout", "stderr"]) {
-		const field = frm.fields_dict[fieldname];
-		if (!field) continue;
-		// Make the Code field roomier; Frappe wires `min_height` to the
-		// underlying CodeMirror/textarea wrapper.
-		try {
-			frm.set_df_property(fieldname, "options", "Text");
-			field.$wrapper.find("textarea, .CodeMirror").css({"min-height": "24em"});
-		} catch (_) {
-			// Best-effort enlargement; we don't fail the form refresh on it.
-		}
+function pretty_print_variables(frm) {
+	const raw = frm.doc.variables;
+	if (!raw || frm._atlas_variables_prettified === frm.doc.name) return;
+	let parsed;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (e) {
+		return;
 	}
+	const pretty = JSON.stringify(parsed, null, 2);
+	if (pretty === raw) {
+		frm._atlas_variables_prettified = frm.doc.name;
+		return;
+	}
+	frm.doc.variables = pretty;
+	frm.refresh_field("variables");
+	frm._atlas_variables_prettified = frm.doc.name;
 }
 
 

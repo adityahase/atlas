@@ -1,45 +1,3 @@
-const SCRIPT_FORMS = {
-	"bootstrap-server.sh": {
-		intro: "Idempotent. Safe to re-run on an Active server.",
-		fields: [
-			{
-				fieldname: "FIRECRACKER_VERSION",
-				label: "Firecracker Version",
-				fieldtype: "Data",
-				default: "v1.15.1",
-				reqd: 1,
-			},
-			{
-				fieldname: "ARCHITECTURE",
-				label: "Architecture",
-				fieldtype: "Select",
-				options: ["x86_64", "aarch64"].join("\n"),
-				default: "x86_64",
-				reqd: 1,
-			},
-		],
-	},
-	"reboot-server.sh": {
-		intro: "Reboots the host. SSH drops mid-Task; the Task may end Failure — that is normal.",
-		fields: [],
-	},
-	"sync-image.sh": {
-		intro: "Downloads kernel + rootfs from the image URLs onto the server.",
-		fields: [
-			{
-				fieldname: "IMAGE_NAME",
-				label: "Image",
-				fieldtype: "Link",
-				options: "Virtual Machine Image",
-				reqd: 1,
-				only_select: 1,
-				get_query: () => ({filters: {is_active: 1}}),
-			},
-		],
-	},
-};
-
-
 frappe.ui.form.on("Server", {
 	refresh(frm) {
 		if (frm.is_new()) {
@@ -82,43 +40,16 @@ function render_running_task_headline(frm) {
 function render_recent_tasks(frm) {
 	const wrapper_id = "atlas-server-recent-tasks";
 	frm.dashboard.wrapper?.find(`#${wrapper_id}`).remove();
-	frappe.db.get_list("Task", {
-		fields: ["name", "subject", "script", "status", "modified"],
-		filters: {server: frm.doc.name},
-		order_by: "modified desc",
-		limit: 5,
-	}).then((rows) => {
-		if (!rows.length) return;
-		const list = rows.map((row) => {
-			const title = row.subject || row.script || row.name;
-			// comment_when() returns a full HTML <span> with relative-time
-			// tooltip; embed it directly (do not html-escape).
-			const ago = frappe.datetime.comment_when(row.modified);
-			return `<li class="d-flex align-items-center mb-1" style="gap: 0.5em;">
-				<span class="indicator-pill ${indicator_color(row.status)}">${frappe.utils.escape_html(row.status || "—")}</span>
-				<a href="/app/task/${encodeURIComponent(row.name)}" class="flex-grow-1">${frappe.utils.escape_html(title)}</a>
-				<span class="text-muted small">${ago}</span>
-			</li>`;
-		}).join("");
-		const html = `
-			<div id="${wrapper_id}" class="form-section">
-				<div class="section-head text-uppercase text-muted small mb-2">${__("Recent Tasks")}</div>
-				<ul class="list-unstyled">${list}</ul>
-				<a href="/app/task/view/list?server=${encodeURIComponent(frm.doc.name)}" class="small">${__("View all")} →</a>
-			</div>
-		`;
-		frm.dashboard.add_section(html, "atlas-recent-tasks");
+	const $section = $(`<div id="${wrapper_id}"></div>`);
+	frm.dashboard.add_section($section, __("Recent Tasks"));
+	frappe.widget.make_widget({
+		widget_type: "quick_list",
+		document_type: "Task",
+		label: __("Recent Tasks"),
+		quick_list_filter: JSON.stringify([["server", "=", frm.doc.name]]),
+		container: $section,
+		options: {},
 	});
-}
-
-
-function indicator_color(status) {
-	return {
-		Pending: "orange",
-		Running: "yellow",
-		Success: "green",
-		Failure: "red",
-	}[status] || "grey";
 }
 
 
@@ -189,34 +120,26 @@ function open_run_task_dialog(frm) {
 
 function build_run_task_dialog(frm, scripts) {
 	const is_system_manager = (frappe.user_roles || []).includes("System Manager");
-	const all_per_script_field_names = collect_all_per_script_field_names();
+	const by_name = Object.fromEntries(scripts.map((s) => [s.name, s]));
 
 	const fields = [
 		{
 			fieldname: "script",
 			label: __("Script"),
 			fieldtype: "Select",
-			options: scripts.join("\n"),
+			options: scripts.map((s) => s.name).join("\n"),
 			reqd: 1,
 			onchange() {
-				const script = dialog.get_value("script");
-				refresh_script_intro(dialog, script);
-				toggle_script_fields(dialog, script, all_per_script_field_names);
+				refresh_script_intro(dialog, by_name[dialog.get_value("script")]);
+				dialog.refresh_dependency?.();
 			},
 		},
 		{fieldname: "script_intro", fieldtype: "HTML"},
 	];
 
-	for (const [script, form] of Object.entries(SCRIPT_FORMS)) {
-		for (const field of form.fields) {
-			fields.push({
-				...field,
-				depends_on: `eval:doc.script === ${JSON.stringify(script)}`,
-				mandatory_depends_on: field.reqd
-					? `eval:doc.script === ${JSON.stringify(script)}`
-					: undefined,
-				reqd: 0,
-			});
+	for (const script of scripts) {
+		for (const field of script.fields || []) {
+			fields.push(dialog_field_for_script(field, script.name));
 		}
 	}
 
@@ -245,7 +168,7 @@ function build_run_task_dialog(frm, scripts) {
 			if (is_system_manager && values.show_advanced) {
 				variables = values._advanced_variables || "{}";
 			} else {
-				variables = collect_typed_variables(script, values);
+				variables = collect_typed_variables(by_name[script], values);
 			}
 			frm.call("run_task_dialog", {script, variables}).then(({message: task_name}) => {
 				dialog.hide();
@@ -255,54 +178,52 @@ function build_run_task_dialog(frm, scripts) {
 	});
 
 	if (scripts.length === 1) {
-		dialog.set_value("script", scripts[0]);
+		dialog.set_value("script", scripts[0].name);
 		refresh_script_intro(dialog, scripts[0]);
-		toggle_script_fields(dialog, scripts[0], all_per_script_field_names);
+		dialog.refresh_dependency?.();
 	}
 
 	return dialog;
 }
 
 
-function collect_all_per_script_field_names() {
-	const names = new Set();
-	for (const form of Object.values(SCRIPT_FORMS)) {
-		for (const field of form.fields) {
-			names.add(field.fieldname);
-		}
+function dialog_field_for_script(field, script_name) {
+	// Server-supplied field dicts use server vocab (`filters` for Link
+	// queries). Translate to the Dialog-control shape and gate the field
+	// on the parent script via depends_on.
+	const {filters, reqd, ...rest} = field;
+	const gate = `eval:doc.script === ${JSON.stringify(script_name)}`;
+	const out = {
+		...rest,
+		depends_on: gate,
+		mandatory_depends_on: reqd ? gate : undefined,
+		reqd: 0,
+	};
+	if (filters) {
+		out.get_query = () => ({filters});
 	}
-	return names;
+	return out;
 }
 
 
 function refresh_script_intro(dialog, script) {
-	const form = SCRIPT_FORMS[script];
 	const field = dialog.fields_dict.script_intro;
 	if (!field || !field.$wrapper) return;
-	if (!form || !form.intro) {
+	const intro = script && script.intro;
+	if (!intro) {
 		field.$wrapper.empty();
 		return;
 	}
 	field.$wrapper.html(
-		`<div class="text-muted small">ⓘ ${frappe.utils.escape_html(form.intro)}</div>`,
+		`<div class="text-muted small">ⓘ ${frappe.utils.escape_html(intro)}</div>`,
 	);
 }
 
 
-function toggle_script_fields(dialog, _script, _all_field_names) {
-	// `depends_on` on each per-script field does the show/hide automatically
-	// once we ask the dialog to re-evaluate dependencies.
-	if (typeof dialog.refresh_dependency === "function") {
-		dialog.refresh_dependency();
-	}
-}
-
-
 function collect_typed_variables(script, values) {
-	const form = SCRIPT_FORMS[script];
-	if (!form) return "{}";
+	if (!script || !script.fields) return {};
 	const variables = {};
-	for (const field of form.fields) {
+	for (const field of script.fields) {
 		const value = values[field.fieldname];
 		if (value !== undefined && value !== null && value !== "") {
 			variables[field.fieldname] = value;

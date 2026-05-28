@@ -94,9 +94,17 @@ class TestServerBootstrap(IntegrationTestCase):
 	def test_get_scripts_returns_operator_visible_scripts(self) -> None:
 		from atlas.atlas import scripts_catalog
 
-		expected = scripts_catalog.operator_visible_scripts()
-		self.assertEqual(self.server.get_scripts(), expected)
+		entries = self.server.get_scripts()
+		# Each entry carries name + intro + fields so the desk Run Task
+		# dialog can render itself purely from the response.
+		self.assertEqual(
+			[entry["name"] for entry in entries],
+			scripts_catalog.operator_visible_scripts(),
+		)
+		for entry in entries:
+			self.assertIn("intro", entry)
+			self.assertIsInstance(entry["fields"], list)
 		# Lifecycle scripts must not leak into the desk picker.
 		hidden = {"provision-vm.sh", "start-vm.sh", "stop-vm.sh",
 			"terminate-vm.sh", "restart-vm.sh"}
-		self.assertFalse(hidden & set(self.server.get_scripts()))
+		self.assertFalse(hidden & {entry["name"] for entry in entries})

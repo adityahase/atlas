@@ -10,6 +10,19 @@ IMMUTABLE_AFTER_INSERT = ("server", "image", "vcpus", "memory_megabytes", "disk_
 
 
 class VirtualMachine(Document):
+	@property
+	def ssh_command(self) -> str:
+		if not self.ipv6_address:
+			return ""
+		return f"ssh root@{self.ipv6_address}"
+
+	@ssh_command.setter
+	def ssh_command(self, _value: object) -> None:
+		# Virtual field: ignore writes. Frappe's hydrate path setattrs every
+		# field on the doc when loading from the form; the value is derived
+		# from ipv6_address.
+		pass
+
 	def autoname(self) -> None:
 		# autoname() runs from set_new_name(), called by Document.insert()
 		# after before_insert(). Dependent fields are derived in

@@ -1,8 +1,18 @@
 frappe.atlas = frappe.atlas || {};
 
 frappe.atlas.add_primary = function (frm, label, fn) {
-	frm.add_custom_button(__(label), fn);
-	frm.change_custom_button_type(__(label), null, "primary");
+	const labelled = __(label);
+	frm.add_custom_button(labelled, fn);
+	// `change_custom_button_type` doesn't always promote a newly-added button
+	// across every Frappe form-state transition (the Terminated VM path was a
+	// regression). Apply the class directly via `frm.custom_buttons` — same
+	// shape Desk uses for delete buttons in the right rail.
+	const $btn = frm.custom_buttons && frm.custom_buttons[labelled];
+	if ($btn && $btn.removeClass && $btn.addClass) {
+		$btn.removeClass("btn-default").addClass("btn-primary");
+	} else {
+		frm.change_custom_button_type(labelled, null, "primary");
+	}
 };
 
 frappe.atlas.add_secondary = function (frm, label, fn) {
@@ -14,8 +24,28 @@ frappe.atlas.add_action = function (frm, label, fn) {
 };
 
 frappe.atlas.add_danger = function (frm, label, fn) {
-	frm.add_custom_button(__(label), fn, __("Actions"));
-	frm.change_custom_button_type(__(label), __("Actions"), "danger");
+	const labelled = __(label);
+	frm.add_custom_button(labelled, fn, __("Actions"));
+	// Dropdown items aren't `.btn` elements, so `change_custom_button_type`'s
+	// `btn-danger` class paints a full button-in-menu. Use `text-danger` on the
+	// anchor itself — same convention Desk uses for the right-rail Delete.
+	// `atlas-tonal-danger` (atlas_desk.css) paints the row red on hover.
+	const $btn = frm.custom_buttons && frm.custom_buttons[labelled];
+	if ($btn && $btn.addClass) {
+		$btn.addClass("text-danger atlas-tonal-danger");
+	}
+};
+
+frappe.atlas.add_success = function (frm, label, fn) {
+	// Used for safe, primary-flavoured actions that live in the Actions
+	// dropdown — e.g. `Re-bootstrap` / `Sync`. Paints the item green on
+	// hover via the tonal class in atlas_desk.css.
+	const labelled = __(label);
+	frm.add_custom_button(labelled, fn, __("Actions"));
+	const $btn = frm.custom_buttons && frm.custom_buttons[labelled];
+	if ($btn && $btn.addClass) {
+		$btn.addClass("atlas-tonal-success");
+	}
 };
 
 frappe.atlas.confirm_cost = function ({title, body_html, proceed_label, proceed}) {
@@ -87,7 +117,21 @@ frappe.atlas.strip_desk_chrome = function (frm) {
 	const $body = frm.page && frm.page.wrapper;
 	if ($body && $body.find) {
 		$body.find(".layout-main-section-wrapper").removeClass("col-lg-8").addClass("col-lg-12");
-		$body.find(".form-timeline, .new-timeline, .timeline, .comment-input-container").hide();
+		// Hide the timeline + comments wrappers. Frappe varies the wrapping
+		// markup across versions — hide every known shape so the Comments
+		// section doesn't leak below the form.
+		$body
+			.find([
+				".form-timeline",
+				".new-timeline",
+				".timeline",
+				".comment-input-container",
+				".comment-box",
+				".form-comments",
+				".comments",
+				".timeline-content",
+			].join(", "))
+			.hide();
 	}
 };
 
@@ -104,7 +148,22 @@ for (const doctype of [
 		},
 		refresh(frm) {
 			frappe.atlas.strip_desk_chrome(frm);
+			suppress_orphan_asterisks(frm);
 		},
 	});
 }
 
+// Some Frappe versions emit the orphan `*` as a bare text node sibling of the
+// `.section-body`'s frappe-controls — text nodes are not styleable via CSS,
+// so we strip them in JS after every refresh.
+function suppress_orphan_asterisks(frm) {
+	const $body = frm.page && frm.page.wrapper;
+	if (!$body || !$body.find) return;
+	$body.find(".form-column .section-body").each(function () {
+		for (const node of Array.from(this.childNodes)) {
+			if (node.nodeType === Node.TEXT_NODE && /^\s*\*\s*$/.test(node.textContent || "")) {
+				node.parentNode.removeChild(node);
+			}
+		}
+	});
+}

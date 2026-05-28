@@ -1,14 +1,9 @@
 {
  "app": "atlas",
  "charts": [],
- "content": "[{\"id\":\"bsc_block\",\"type\":\"custom_block\",\"data\":{\"custom_block_name\":\"atlas-bootstrap-checklist\",\"col\":12}},{\"id\":\"hdr_fleet\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Fleet at a glance</b></span>\",\"col\":12}},{\"id\":\"nc_active_servers\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Active Servers\",\"col\":3}},{\"id\":\"nc_running_vms\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Running Virtual Machines\",\"col\":3}},{\"id\":\"nc_pending_vms\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Pending Virtual Machines\",\"col\":3}},{\"id\":\"nc_failed_tasks\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Failed Tasks (24h)\",\"col\":3}},{\"id\":\"sp1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr_activity\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Recent activity</b></span>\",\"col\":12}},{\"id\":\"ql_recent_tasks\",\"type\":\"quick_list\",\"data\":{\"quick_list_name\":\"Recent Tasks\",\"col\":12}}]",
+ "content": "[{\"id\":\"onb_atlas_setup\",\"type\":\"onboarding\",\"data\":{\"onboarding_name\":\"Atlas Setup\",\"col\":12}},{\"id\":\"hdr_fleet\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Fleet at a glance</b></span>\",\"col\":12}},{\"id\":\"nc_active_servers\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Active Servers\",\"col\":3}},{\"id\":\"nc_running_vms\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Running Virtual Machines\",\"col\":3}},{\"id\":\"nc_pending_vms\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Pending Virtual Machines\",\"col\":3}},{\"id\":\"nc_failed_tasks\",\"type\":\"number_card\",\"data\":{\"number_card_name\":\"Failed Tasks (24h)\",\"col\":3}},{\"id\":\"sp1\",\"type\":\"spacer\",\"data\":{\"col\":12}},{\"id\":\"hdr_activity\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\"><b>Recent activity</b></span>\",\"col\":12}},{\"id\":\"ql_recent_tasks\",\"type\":\"quick_list\",\"data\":{\"quick_list_name\":\"Recent Tasks\",\"col\":12}}]",
  "creation": "2026-05-27 00:00:00.000000",
- "custom_blocks": [
-  {
-   "custom_block_name": "atlas-bootstrap-checklist",
-   "label": "atlas-bootstrap-checklist"
-  }
- ],
+ "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
  "for_user": "",

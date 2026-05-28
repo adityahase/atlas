@@ -7,6 +7,7 @@
  "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
+  "tab_overview",
   "server_name",
   "provider",
   "column_break_header",
@@ -16,13 +17,13 @@
   "column_break_provider_resource",
   "region",
   "size",
-  "section_break_networking",
+  "tab_networking",
   "ipv4_address",
   "ipv6_address",
   "column_break_networking",
   "ipv6_prefix",
   "ipv6_virtual_machine_range",
-  "section_break_host_info",
+  "tab_host_info",
   "architecture",
   "column_break_host_info",
   "firecracker_version",
@@ -31,6 +32,11 @@
   "notes"
  ],
  "fields": [
+  {
+   "fieldname": "tab_overview",
+   "fieldtype": "Tab Break",
+   "label": "Overview"
+  },
   {
    "fieldname": "server_name",
    "fieldtype": "Data",
@@ -92,8 +98,8 @@
    "read_only": 1
   },
   {
-   "fieldname": "section_break_networking",
-   "fieldtype": "Section Break",
+   "fieldname": "tab_networking",
+   "fieldtype": "Tab Break",
    "label": "Networking"
   },
   {
@@ -126,9 +132,8 @@
    "read_only": 1
   },
   {
-   "fieldname": "section_break_host_info",
-   "fieldtype": "Section Break",
-   "collapsible": 1,
+   "fieldname": "tab_host_info",
+   "fieldtype": "Tab Break",
    "label": "Host info"
   },
   {

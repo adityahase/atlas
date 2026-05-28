@@ -1,0 +1,35 @@
+{
+ "allow_roles": [
+  {
+   "role": "System Manager"
+  }
+ ],
+ "creation": "2026-05-28 00:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Module Onboarding",
+ "documentation_url": "",
+ "idx": 0,
+ "is_complete": 0,
+ "modified": "2026-05-28 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Atlas",
+ "name": "Atlas Setup",
+ "owner": "Administrator",
+ "steps": [
+  {
+   "step": "Add Server Provider"
+  },
+  {
+   "step": "Provision Server"
+  },
+  {
+   "step": "Add Virtual Machine Image"
+  },
+  {
+   "step": "Provision Virtual Machine"
+  }
+ ],
+ "subtitle": "Provider → Server → Image → Virtual Machine. Or run `bench --site <site> execute atlas.bootstrap.run` to seed all four from one command.",
+ "success_message": "All set! Atlas is ready to run virtual machines.",
+ "title": "Get Atlas running"
+}

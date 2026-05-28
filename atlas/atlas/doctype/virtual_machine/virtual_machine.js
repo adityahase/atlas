@@ -11,17 +11,17 @@ const SECONDARY_BY_STATUS = {
 };
 
 
-const SIZE_PRESETS = [
-	{key: "small", label: "Small", vcpus: 1, memory_megabytes: 512, disk_gigabytes: 4},
-	{key: "medium", label: "Medium", vcpus: 2, memory_megabytes: 2048, disk_gigabytes: 10},
-	{key: "large", label: "Large", vcpus: 4, memory_megabytes: 8192, disk_gigabytes: 40},
-];
+const SIZE_PRESETS = {
+	"Small (1 vCPU / 512 MB / 4 GB)": {vcpus: 1, memory_megabytes: 512, disk_gigabytes: 4},
+	"Medium (2 vCPU / 2048 MB / 10 GB)": {vcpus: 2, memory_megabytes: 2048, disk_gigabytes: 10},
+	"Large (4 vCPU / 8192 MB / 40 GB)": {vcpus: 4, memory_megabytes: 8192, disk_gigabytes: 40},
+};
 
 
 frappe.ui.form.on("Virtual Machine", {
 	refresh(frm) {
 		if (frm.is_new()) {
-			render_creation_form_polish(frm);
+			render_creation_messages(frm);
 			return;
 		}
 		add_lifecycle_buttons(frm);
@@ -29,8 +29,14 @@ frappe.ui.form.on("Virtual Machine", {
 		render_dashboard_chips(frm);
 		render_status_intro(frm);
 		expand_networking_for_pending(frm);
-		render_ssh_command_field(frm);
 		subscribe_to_realtime(frm);
+	},
+	size_preset(frm) {
+		const preset = SIZE_PRESETS[frm.doc.size_preset];
+		if (!preset) return;
+		frm.set_value("vcpus", preset.vcpus);
+		frm.set_value("memory_megabytes", preset.memory_megabytes);
+		frm.set_value("disk_gigabytes", preset.disk_gigabytes);
 	},
 	server(frm) {
 		if (frm.is_new()) {
@@ -48,12 +54,6 @@ frappe.ui.form.on("Virtual Machine", {
 		}
 	},
 });
-
-
-function render_creation_form_polish(frm) {
-	render_size_preset_radios(frm);
-	render_creation_messages(frm);
-}
 
 
 function render_creation_messages(frm) {
@@ -81,51 +81,6 @@ function render_description_nudge(frm) {
 		__("Without a description the list will show only a UUID. Add at least a one-word label."),
 		"yellow",
 	);
-}
-
-
-function render_size_preset_radios(frm) {
-	// Inject preset radios immediately above the `vcpus` input. Avoids a
-	// new HTML schema field; the wireframe puts presets at the top of the
-	// Resources section.
-	const vcpus_field = frm.fields_dict.vcpus;
-	if (!vcpus_field || !vcpus_field.$wrapper) return;
-	const $form_group = vcpus_field.$wrapper.closest(".frappe-control").parent();
-	if (!$form_group.length) return;
-	$form_group.find(".atlas-size-presets-row").remove();
-	const radios = SIZE_PRESETS.map((preset) => `
-		<label class="atlas-size-preset" style="margin-right: 1em;">
-			<input type="radio" name="atlas-size-preset" value="${preset.key}"
-				data-vcpus="${preset.vcpus}"
-				data-memory="${preset.memory_megabytes}"
-				data-disk="${preset.disk_gigabytes}">
-			<b>${frappe.utils.escape_html(preset.label)}</b>
-			<span class="text-muted small">
-				(${preset.vcpus} / ${preset.memory_megabytes} MB / ${preset.disk_gigabytes} GB)
-			</span>
-		</label>
-	`).join("");
-	const $row = $(`
-		<div class="atlas-size-presets-row form-group" style="margin-bottom: 0.75em;">
-			<label class="control-label">${__("Size preset")}</label>
-			<div class="atlas-size-presets" style="display: flex; flex-wrap: wrap; gap: 0.5em;">
-				${radios}
-				<label class="atlas-size-preset">
-					<input type="radio" name="atlas-size-preset" value="custom" checked>
-					<b>${__("Custom")}</b>
-					<span class="text-muted small">(${__("set values below")})</span>
-				</label>
-			</div>
-		</div>
-	`);
-	$form_group.prepend($row);
-	$row.off("change.atlas-preset").on("change.atlas-preset", "input[name='atlas-size-preset']", (event) => {
-		const target = event.currentTarget;
-		if (target.value === "custom") return;
-		frm.set_value("vcpus", parseInt(target.dataset.vcpus, 10));
-		frm.set_value("memory_megabytes", parseInt(target.dataset.memory, 10));
-		frm.set_value("disk_gigabytes", parseInt(target.dataset.disk, 10));
-	});
 }
 
 
@@ -278,34 +233,8 @@ function render_dashboard_chips(frm) {
 			frm.doc.status === "Running" ? "green" :
 			frm.doc.status === "Pending" ? "orange" :
 			frm.doc.status === "Failed" ? "red" : "grey";
-		// Use add_indicator's HTML support: pass an anchor that intercepts the
-		// click in our delegated handler.
-		frm.dashboard.add_indicator(
-			`<a class="atlas-ssh-chip" href="#" data-ipv6="${safe}">
-				IPv6 [${safe}] 📋
-			</a>`,
-			indicator_color,
-		);
+		frm.dashboard.add_indicator(`IPv6 [${safe}]`, indicator_color);
 	}
-	bind_ssh_chip(frm);
-}
-
-
-function bind_ssh_chip(frm) {
-	const $wrapper = frm.dashboard && frm.dashboard.wrapper;
-	if (!$wrapper || !$wrapper.find) return;
-	$wrapper.off("click.atlas-ssh").on("click.atlas-ssh", ".atlas-ssh-chip", (event) => {
-		event.preventDefault();
-		const ipv6 = event.currentTarget.dataset.ipv6;
-		if (!ipv6) return;
-		const command = `ssh root@${ipv6}`;
-		navigator.clipboard.writeText(command).then(() => {
-			frappe.show_alert({
-				message: __("SSH command copied: {0}", [`<code>${frappe.utils.escape_html(command)}</code>`]),
-				indicator: "green",
-			}, 4);
-		});
-	});
 }
 
 
@@ -363,39 +292,6 @@ function expand_networking_for_pending(frm) {
 	if (section && typeof section.collapse === "function") {
 		section.collapse(false);
 	}
-}
-
-
-function render_ssh_command_field(frm) {
-	const field = frm.fields_dict.ssh_command_html;
-	if (!field || !field.$wrapper) return;
-	if (!frm.doc.ipv6_address) {
-		field.$wrapper.empty();
-		return;
-	}
-	const command = `ssh root@${frm.doc.ipv6_address}`;
-	const safe_command = frappe.utils.escape_html(command);
-	field.$wrapper.html(`
-		<div class="form-group">
-			<label class="control-label">${__("SSH command")}</label>
-			<div class="atlas-ssh-row d-flex align-items-center" style="gap: 0.5em;">
-				<code class="flex-grow-1 p-2 border rounded" style="background: var(--bg-color, #f8f9fa);">${safe_command}</code>
-				<button type="button" class="btn btn-default btn-sm atlas-ssh-copy" data-command="${safe_command}">
-					${__("Copy")}
-				</button>
-			</div>
-			<p class="text-muted small mt-1">${__("IPv6 is the only stable identifier outside the desk.")}</p>
-		</div>
-	`);
-	field.$wrapper.off("click.atlas-ssh-copy").on("click.atlas-ssh-copy", ".atlas-ssh-copy", (event) => {
-		event.preventDefault();
-		navigator.clipboard.writeText(command).then(() => {
-			frappe.show_alert({
-				message: __("SSH command copied."),
-				indicator: "green",
-			});
-		});
-	});
 }
 
 

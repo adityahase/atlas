@@ -13,7 +13,7 @@ frappe.ui.form.on("Virtual Machine Image", {
 		if (frm.is_new()) {
 			return;
 		}
-		frappe.atlas.add_secondary(frm, "Sync to Server", () => open_sync_to_server_dialog(frm));
+		frappe.atlas.add_primary(frm, "Sync to Server", () => open_sync_to_server_dialog(frm));
 		frappe.atlas.add_action(frm, "Sync to All Servers", () => confirm_sync_to_all(frm));
 		render_sync_status_panel(frm);
 		enforce_lock_state(frm);
@@ -32,40 +32,48 @@ function render_sync_status_panel(frm) {
 			);
 			return;
 		}
-		const list_html = rows.map((row) => {
-			const server = frappe.utils.escape_html(row.server);
-			const region = row.region ? `<span class="text-muted small">${frappe.utils.escape_html(row.region)}</span>` : "";
-			let right_cell;
-			if (row.task) {
-				// `comment_when` already returns an HTML <span> — do not escape
-				// it again or you see the literal markup.
-				const when_html = frappe.datetime.comment_when(row.synced_at);
-				right_cell = `
-					${when_html}
-					<a href="/app/task/${encodeURIComponent(row.task)}" class="ml-2 small">${frappe.utils.escape_html(row.task.slice(0, 10))} →</a>
-				`;
-			} else {
-				right_cell = `
-					<span class="text-muted small">${__("never")}</span>
-					<a href="#" class="ml-2 small atlas-sync-now" data-server="${server}">${__("Sync now")} →</a>
-				`;
+		// Reusing `.quick-list-widget-box` / `.quick-list-item` lets these
+		// rows pick up the same padding, hover, ellipsis, and pill spacing
+		// as the workspace `quick_list` widget — without any new CSS.
+		const $body = $(
+			`<div class="quick-list-widget-box atlas-sync-status-list">
+				<div class="widget-body"></div>
+			</div>`,
+		);
+		const $list = $body.find(".widget-body");
+		for (const row of rows) {
+			const server_name = frappe.utils.escape_html(row.server);
+			const region_html = row.region
+				? ` <span class="text-muted small">${frappe.utils.escape_html(row.region)}</span>`
+				: "";
+			const synced = !!row.task;
+			const pill_color = synced ? "green" : "gray";
+			const pill_label = synced ? __("Synced") : __("Never");
+			// `comment_when` returns an HTML <span> with relative-time tooltip;
+			// embed directly (do not html-escape).
+			const time_html = synced ? frappe.datetime.comment_when(row.synced_at) : "";
+			const action_html = synced
+				? ""
+				: `<a href="#" class="small atlas-sync-now" data-server="${server_name}">${__("Sync now")} →</a>`;
+			const $item = $(`
+				<div class="quick-list-item">
+					<div class="ellipsis left">
+						<div class="ellipsis title">${server_name}${region_html}</div>
+						<div class="timestamp text-muted">${time_html}${time_html && action_html ? " " : ""}${action_html}</div>
+					</div>
+					<div class="status indicator-pill ${pill_color} ellipsis">${pill_label}</div>
+				</div>
+			`);
+			if (synced) {
+				$item.on("click", (event) => {
+					// Let inner anchors (e.g. future drill-ins) handle their own clicks.
+					if (event.target.closest("a")) return;
+					frappe.set_route("Form", "Task", row.task);
+				});
 			}
-			return `<tr>
-				<td><a href="/app/server/${encodeURIComponent(row.server)}">${server}</a> ${region}</td>
-				<td class="text-right">${right_cell}</td>
-			</tr>`;
-		}).join("");
-		field.$wrapper.html(`
-			<table class="table table-sm atlas-sync-status">
-				<thead>
-					<tr>
-						<th>${__("Server")}</th>
-						<th class="text-right">${__("Last sync")}</th>
-					</tr>
-				</thead>
-				<tbody>${list_html}</tbody>
-			</table>
-		`);
+			$list.append($item);
+		}
+		field.$wrapper.empty().append($body);
 		field.$wrapper.off("click.atlas-sync-now").on("click.atlas-sync-now", ".atlas-sync-now", (event) => {
 			event.preventDefault();
 			const server = event.currentTarget.dataset.server;
@@ -132,7 +140,7 @@ function open_sync_to_server_dialog(frm, prefilled_server) {
 
 function confirm_sync_to_all(frm) {
 	frappe.db.get_list("Server", {
-		fields: ["name", "region", "status"],
+		fields: ["name", "region"],
 		filters: {status: "Active"},
 		order_by: "name asc",
 		limit: 100,
@@ -144,23 +152,44 @@ function confirm_sync_to_all(frm) {
 			});
 			return;
 		}
-		const target_rows = servers.map((server) => `
-			<li><b>${frappe.utils.escape_html(server.name)}</b>
-				<span class="text-muted">${frappe.utils.escape_html(server.region || "")} · ${frappe.utils.escape_html(server.status)}</span>
-			</li>
-		`).join("");
-		const body = `
-			<p>${__("Image: {0}", [`<b>${frappe.utils.escape_html(frm.doc.image_name || frm.doc.name)}</b>`])}</p>
-			<p>${__("Targets:")}</p>
-			<ul class="list-unstyled" style="padding-left: 1em">${target_rows}</ul>
-			<p class="text-muted small">${__("Each download fetches kernel + rootfs over the public internet, verifies SHA-256, and runs sync-image.sh.")}</p>
-		`;
-		frappe.atlas.confirm_cost({
-			title: __("Sync to {0} active server(s)?", [servers.length]),
-			body_html: body,
-			proceed_label: __("Sync to All"),
-			proceed() {
-				frm.call("sync_to_all_servers").then(({message}) => {
+		const options = servers.map((server) => ({
+			label: server.region ? `${server.name} (${server.region})` : server.name,
+			value: server.name,
+			checked: 1,
+		}));
+		const dialog = new frappe.ui.Dialog({
+			title: __("Sync to active servers"),
+			fields: [
+				{
+					fieldname: "image_intro",
+					fieldtype: "HTML",
+					options: `<p>${__("Image: {0}", [`<b>${frappe.utils.escape_html(frm.doc.image_name || frm.doc.name)}</b>`])}</p>`,
+				},
+				{
+					fieldname: "targets",
+					fieldtype: "MultiCheck",
+					label: __("Targets"),
+					options: options,
+					columns: 1,
+				},
+				{
+					fieldname: "footer_hint",
+					fieldtype: "HTML",
+					options: `<p class="text-muted small">${__("Each download fetches kernel + rootfs over the public internet, verifies SHA-256, and runs sync-image.sh.")}</p>`,
+				},
+			],
+			primary_action_label: __("Sync"),
+			primary_action(values) {
+				const targets = values.targets || [];
+				if (!targets.length) {
+					frappe.show_alert({
+						message: __("Pick at least one server."),
+						indicator: "orange",
+					});
+					return;
+				}
+				dialog.hide();
+				frm.call("sync_to_all_servers", {servers: targets}).then(({message}) => {
 					frappe.show_alert({
 						message: __("Enqueued {0} sync Task(s).", [message.length]),
 						indicator: "blue",
@@ -168,5 +197,6 @@ function confirm_sync_to_all(frm) {
 				});
 			},
 		});
+		dialog.show();
 	});
 }

@@ -1,0 +1,195 @@
+/*
+ * Atlas Desk polish — small, scoped overrides on top of Frappe Desk that
+ * close the visual gap with Frappe UI apps (Gameplan / CRM) without
+ * touching Desk's core CSS or doctype layout.
+ *
+ * Sources of intent:
+ *   ui/research/06-page-chrome.md   (rounded sidebar items)
+ *   ui/research/04-forms-and-inputs.md (softer field labels)
+ *   ui/research/05-list-views.md    (list empty-state CTA)
+ *
+ * All selectors are read from a live Atlas Desk DOM — see
+ *   ui/solutions/01-sidebar-polish.md for the snapshot that justifies
+ *   `.active-sidebar` over `.selected`.
+ */
+
+
+/* ---------------------------------------------------------------------- *
+ * Sidebar items — inset 8px, 8px radius, subtle hover/active.
+ *
+ * The hover/active fill goes on `.standard-sidebar-item` itself, not on
+ * its child `.item-anchor`, so the radius can clip the fill cleanly.
+ * ---------------------------------------------------------------------- */
+
+.body-sidebar .standard-sidebar-item,
+.body-sidebar .sidebar-child-item {
+	margin-left: 8px;
+	margin-right: 8px;
+	border-radius: 8px;
+}
+
+.body-sidebar .standard-sidebar-item:hover,
+.body-sidebar .sidebar-child-item:hover {
+	background: var(--surface-gray-2);
+}
+
+/* Frappe marks the current workspace with `.active-sidebar`, not
+ * `.selected`. The recommendation in 08-recommendations.md predated this
+ * rename — see ui/solutions/DRIFT.md §Solution 1. */
+.body-sidebar .standard-sidebar-item.active-sidebar,
+.body-sidebar .sidebar-child-item.active-sidebar {
+	background: var(--surface-gray-3);
+}
+
+/* Ensure the inner anchor doesn't paint its own background and double
+ * up the fill, and that it stretches to the rounded edge. */
+.body-sidebar .standard-sidebar-item > .item-anchor,
+.body-sidebar .sidebar-child-item > .item-anchor {
+	background: transparent;
+	border-radius: inherit;
+}
+
+
+/* ---------------------------------------------------------------------- *
+ * Form field labels — soften from ink-gray-7 to ink-gray-5 so the value
+ * reads louder than the label, matching CRM / frappe-ui FormControl.
+ * Scope: only inside `.frappe-control` so we don't recolor dialog titles
+ * or section heads.
+ *
+ * See ui/research/04-forms-and-inputs.md §"Field labels".
+ * ---------------------------------------------------------------------- */
+
+.frappe-control .control-label {
+	color: var(--ink-gray-5);
+}
+
+
+/* ---------------------------------------------------------------------- *
+ * Tonal dropdown items — Atlas Actions dropdown items already use
+ * `text-danger` for destructive actions (via frappe.atlas.add_danger).
+ * Lift the visual weight: paint the whole item background with a soft
+ * red/green tonal fill, matching the frappe-ui Button theme=red|green
+ * subtle variants.
+ *
+ * Activated by adding `.atlas-tonal-danger` or `.atlas-tonal-success`
+ * to the dropdown <a> via `frappe.atlas.add_danger` / `add_success`.
+ *
+ * See ui/research/03-buttons.md §"Theme variants" and
+ *     ui/research/08-recommendations.md §6.
+ * ---------------------------------------------------------------------- */
+
+.dropdown-menu .atlas-tonal-danger,
+.dropdown-menu a.text-danger {
+	color: var(--red-700, #b52a2a);
+}
+
+.dropdown-menu .atlas-tonal-danger:hover,
+.dropdown-menu a.text-danger:hover {
+	background: var(--surface-red-2, #ffe7e7);
+	color: var(--red-700, #b52a2a);
+}
+
+.dropdown-menu .atlas-tonal-success {
+	color: var(--green-800, #075e35);
+}
+
+.dropdown-menu .atlas-tonal-success:hover {
+	background: var(--surface-green-2, #e4fae9);
+	color: var(--green-800, #075e35);
+}
+
+
+/* ---------------------------------------------------------------------- *
+ * List empty state — center the illustration + CTA, give the body text
+ * a bit of breathing room. Targets Desk's built-in `.no-result` block
+ * that ships inside the list view, so we don't need a custom controller
+ * method.
+ *
+ * See ui/research/05-list-views.md §"Empty-state".
+ * ---------------------------------------------------------------------- */
+
+.list-view .no-result {
+	padding: 48px 16px;
+	max-width: 420px;
+	margin: 0 auto;
+	text-align: center;
+	color: var(--ink-gray-5);
+}
+
+.list-view .no-result .msg-box {
+	gap: 12px;
+}
+
+.list-view .no-result .btn {
+	margin-top: 16px;
+}
+
+
+/* ---------------------------------------------------------------------- *
+ * One primary button per page.
+ *
+ * Atlas forms surface a lifecycle hero action (Bootstrap / Provision /
+ * Sync to Server / Re-provision as new / Reboot Server …) painted via
+ * `frappe.atlas.add_primary` as `.btn-primary` inside `.page-actions`.
+ * Desk also renders its own `.standard-actions .primary-action` Save
+ * button as solid `.btn-primary` whenever the form is loaded — even on a
+ * clean record. The result is two solid-black buttons competing in the
+ * page head, which violates the taste rule "one primary button per page"
+ * (research/03-buttons.md, llm/Taste.md).
+ *
+ * Fix: when a `.custom-actions .btn-primary` exists in the page head,
+ * demote `Save` to an outline/subtle variant — same affordance, lower
+ * visual weight, the lifecycle action stays the hero. Save remains fully
+ * functional via click and Ctrl+S.
+ *
+ * Uses `:has()` which is supported across Chromium / Firefox / Safari
+ * (2023+). Older browsers fall back to the default Desk behaviour — no
+ * worse than today.
+ *
+ * See ui/solutions/DRIFT.md §Solution 6 follow-up and
+ *     ui/research/03-buttons.md §"Theme variants".
+ * ---------------------------------------------------------------------- */
+
+.page-head:has(.page-actions .custom-actions > .btn-primary) .standard-actions .primary-action {
+	background-color: var(--surface-white);
+	color: var(--ink-gray-7);
+	border: 1px solid var(--border-color, var(--gray-300));
+	box-shadow: none;
+}
+
+.page-head:has(.page-actions .custom-actions > .btn-primary) .standard-actions .primary-action:hover {
+	background-color: var(--surface-gray-2);
+	color: var(--ink-gray-8);
+}
+
+.page-head:has(.page-actions .custom-actions > .btn-primary) .standard-actions .primary-action:focus,
+.page-head:has(.page-actions .custom-actions > .btn-primary) .standard-actions .primary-action:active {
+	background-color: var(--surface-gray-3);
+	color: var(--ink-gray-9);
+}
+
+
+/* ---------------------------------------------------------------------- *
+ * Task stdout / stderr — give the log panes room to breathe so the
+ * operator doesn't have to scroll inside a tiny textarea for every
+ * non-trivial run. Targets both the plain textarea and the CodeMirror
+ * wrapper (Frappe swaps between them depending on Code field options).
+ * ---------------------------------------------------------------------- */
+
+.frappe-control[data-fieldname="stdout"] textarea,
+.frappe-control[data-fieldname="stderr"] textarea,
+.frappe-control[data-fieldname="stdout"] .CodeMirror,
+.frappe-control[data-fieldname="stderr"] .CodeMirror {
+	min-height: 24em;
+}
+
+
+/* ---------------------------------------------------------------------- *
+ * Hide the bare reqd-asterisk text node Frappe's form layout emits at
+ * the top of a form column when the first field is required — the real
+ * label asterisk is still rendered next to the field name.
+ * ---------------------------------------------------------------------- */
+
+.form-column .section-body > .reqd:not(.frappe-control) {
+	display: none !important;
+}

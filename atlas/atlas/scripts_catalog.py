@@ -16,10 +16,64 @@ from pathlib import Path
 import frappe
 
 OPERATOR_VISIBLE: frozenset[str] = frozenset({
-	"bootstrap-server.sh",
-	"reboot-server.sh",
+	# Bootstrap and Reboot have dedicated buttons with confirmation guards on
+	# the Server form; exposing the raw scripts in the Run Task picker
+	# duplicates those flows without the guards. `sync-image.sh` is the only
+	# ad-hoc script the operator should reach for from here.
 	"sync-image.sh",
 })
+
+
+# Per-script Run Task dialog metadata. The client renders the dialog purely
+# from this — script names, intros, and field schemas all live here. Each
+# entry is `{intro: str, fields: list[dict]}`; field dicts use Frappe Dialog
+# field shapes (`fieldname`, `fieldtype`, `label`, `default`, `reqd`, ...).
+SCRIPT_FORMS: dict[str, dict] = {
+	"bootstrap-server.sh": {
+		"intro": "Idempotent. Safe to re-run on an Active server.",
+		"fields": [
+			{
+				"fieldname": "FIRECRACKER_VERSION",
+				"label": "Firecracker Version",
+				"fieldtype": "Data",
+				"default": "v1.15.1",
+				"reqd": 1,
+			},
+			{
+				"fieldname": "ARCHITECTURE",
+				"label": "Architecture",
+				"fieldtype": "Select",
+				"options": "x86_64\naarch64",
+				"default": "x86_64",
+				"reqd": 1,
+			},
+		],
+	},
+	"reboot-server.sh": {
+		"intro": "Reboots the host. SSH drops mid-Task; the Task may end Failure — that is normal.",
+		"fields": [],
+	},
+	"sync-image.sh": {
+		"intro": "Downloads kernel + rootfs from the image URLs onto the server.",
+		"fields": [
+			{
+				"fieldname": "IMAGE_NAME",
+				"label": "Image",
+				"fieldtype": "Link",
+				"options": "Virtual Machine Image",
+				"reqd": 1,
+				"only_select": 1,
+				"filters": {"is_active": 1},
+			},
+		],
+	},
+}
+
+
+def script_form(script: str) -> dict:
+	"""Return the Run Task dialog metadata for `script`, or an empty form
+	(no intro, no fields) for scripts that don't need any variables."""
+	return SCRIPT_FORMS.get(script, {"intro": "", "fields": []})
 
 
 @functools.lru_cache(maxsize=1)

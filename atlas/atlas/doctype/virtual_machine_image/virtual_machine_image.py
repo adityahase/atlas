@@ -97,11 +97,15 @@ class VirtualMachineImage(Document):
 		return results
 
 	@frappe.whitelist()
-	def sync_to_all_servers(self) -> list[str]:
-		"""Enqueue one sync Task per Active server. Returns Task names."""
-		servers = frappe.get_all(
-			"Server", filters={"status": "Active"}, pluck="name"
-		)
+	def sync_to_all_servers(self, servers: list[str] | str | None = None) -> list[str]:
+		"""Enqueue one sync Task per server in `servers` (defaults to every
+		Active server). Returns Task names."""
+		if isinstance(servers, str):
+			servers = frappe.parse_json(servers) or None
+		if not servers:
+			servers = frappe.get_all(
+				"Server", filters={"status": "Active"}, pluck="name"
+			)
 		return [self.sync_to_server(server) for server in servers]
 
 	@frappe.whitelist()

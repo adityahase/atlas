@@ -24,7 +24,7 @@ add_to_apps_screen = [
 # ------------------
 
 # include js, css files in header of desk.html
-# app_include_css = "/assets/atlas/css/atlas.css"
+app_include_css = "/assets/atlas/css/atlas_desk.css"
 # app_include_js = "/assets/atlas/js/atlas.js"
 
 # include js, css files in header of web template
@@ -49,17 +49,11 @@ doctype_js = {
 	"Task": "public/js/atlas_form_overrides.js",
 }
 
-# Bootstrap-checklist Custom HTML Block shipped with the app.
-fixtures = [
-	{"doctype": "Custom HTML Block", "filters": [["name", "=", "atlas-bootstrap-checklist"]]},
-]
-
 # Note: redirecting `/desk` → `/app/atlas` is non-trivial (Frappe hardcodes
-# `/desk` to the multi-app launcher). The wireframe in
-# `ux/solutions/01-workspace-solution.md` §2 calls for it but it is deferred
-# because every entry point that matters (sidebar Home button, bookmarked
-# `/app/atlas`, login redirect after manual login) already lands here. The
-# residual one-click launcher cost is acceptable.
+# `/desk` to the multi-app launcher; see `spec/10-desk-ui.md` §"The
+# workspace"). Every entry point that matters (sidebar Home button,
+# bookmarked `/app/atlas`, login redirect after manual login) already lands
+# here, so the residual one-click launcher cost is acceptable.
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}

@@ -152,7 +152,8 @@ def _check_bootstrap_status_guard(server) -> None:
 def _check_get_scripts(server) -> None:
 	scripts = server.get_scripts()
 	assert isinstance(scripts, list) and scripts, scripts
-	assert "bootstrap-server.sh" in scripts, scripts
+	names = {entry["name"] for entry in scripts}
+	assert "sync-image.sh" in names, names
 
 
 def _check_finish_provisioning_idempotent(server) -> None:
