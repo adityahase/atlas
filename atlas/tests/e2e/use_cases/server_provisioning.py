@@ -93,6 +93,25 @@ def run_against_shared(reuse: bool = True, keep: bool = True) -> None:
 		_check_finish_provisioning_idempotent(server)
 
 
+def run_smoke(reuse: bool = True, keep: bool = True) -> None:
+	"""Host/API-only path for development against the shared server. Drives the
+	DO `authenticate()` round trip and the `finish_provisioning` idempotency
+	re-run (both need a live host / live token).
+
+	The true fresh-provision host fact is `run()` — it owns a dedicated droplet
+	and is the only path through `provision_server` + `finish_provisioning`
+	against a fresh host. Skips the duplicate-name throw, bootstrap status
+	guard, and `get_scripts` (pure logic, covered by `server/test_server.py`
+	and `server/test_server_runtask.py`)."""
+	with phase("server-provisioning (smoke)", reuse=reuse, keep=keep) as server:
+		_check_test_connection(server)
+		_check_finish_provisioning_idempotent(server)
+		# The shared host was bootstrapped (and re-bootstrapped by the
+		# idempotency check above), so the hardening drop-ins are present —
+		# read them back here too, the cheap host-only regression guard.
+		_assert_hardening_applied(server.name)
+
+
 # ----- fresh-provision helpers ---------------------------------------------
 
 

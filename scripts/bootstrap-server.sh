@@ -81,15 +81,18 @@ fi
 # 4. Kernel/network sysctls: VM-networking essentials + CIS 3.3 hardening.
 #    The forwarding + proxy_ndp lines are LOAD-BEARING for the routed-tap VM
 #    networking model (each VM is a per-VM tap, no bridge; the host routes
-#    eth0<->tap, which IS forwarding). CIS 3.3.1 says disable forwarding — we
-#    DO NOT, by design; see spec/03-bootstrapping.md "Host hardening". Blast
-#    radius is contained at the `inet atlas` nft forward chain, not here.
-#    The remaining lines are CIS 3.3 controls that a routing host still wants.
+#    eth0<->tap, which IS forwarding). IPv6 is the guest's public address;
+#    IPv4 forwarding backs the NAT44 egress masquerade (step 9a). CIS 3.3.1
+#    says disable forwarding — we DO NOT, by design (both families), see
+#    spec/03-bootstrapping.md "Host hardening". Blast radius is contained at
+#    the `inet atlas` nft chains, not here. The remaining lines are CIS 3.3
+#    controls that a routing host still wants.
 sudo install -m 0644 /dev/stdin /etc/sysctl.d/60-atlas.conf <<'CONF'
-# --- VM networking (required; deliberate CIS 3.3.1 deviation) ---
+# --- VM networking (required; deliberate CIS 3.3.1 deviation, v4 + v6) ---
 net.ipv6.conf.all.forwarding = 1
 net.ipv6.conf.default.forwarding = 1
 net.ipv6.conf.all.proxy_ndp = 1
+net.ipv4.ip_forward = 1
 
 # --- CIS 3.3 network hardening (compatible with a routing host) ---
 # 3.3.5/3.3.6 a hostile guest must not inject routes via ICMP redirects
@@ -218,9 +221,20 @@ fi
 sudo swapoff -a
 
 # 9. nftables scaffold. Two-shot: create-if-missing, then ensure chains exist.
+#    One inet table holds both the v6 forward chain and the v4 egress NAT.
 sudo nft list table inet atlas >/dev/null 2>&1 || sudo nft add table inet atlas
 sudo nft list chain inet atlas forward >/dev/null 2>&1 || \
     sudo nft "add chain inet atlas forward { type filter hook forward priority filter; policy accept; }"
+
+# 9a. IPv4 egress: masquerade the per-VM private /30s (carved from
+#     100.64.0.0/16) out the host's public uplink. One host-wide rule covers
+#     every VM — the source range is fixed, so no per-VM NAT churn. The guest
+#     is reachable from outside over IPv6 only; this gives it *outbound* v4.
+uplink="$(ip -j route show default | jq -r '.[0].dev')"
+sudo nft list chain inet atlas postrouting >/dev/null 2>&1 || \
+    sudo nft "add chain inet atlas postrouting { type nat hook postrouting priority srcnat; policy accept; }"
+sudo nft list chain inet atlas postrouting | grep -q "ip saddr 100.64.0.0/16" || \
+    sudo nft add rule inet atlas postrouting ip saddr 100.64.0.0/16 oifname "$uplink" masquerade
 
 # 10. Directories.
 sudo install -d -m 0700 /var/lib/atlas

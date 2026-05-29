@@ -7,14 +7,14 @@ else.
 /var/lib/atlas/
 ├── images/
 │   └── ubuntu-24.04/
-│       ├── vmlinux-6.1.141           # kernel binary, immutable per image
-│       └── ubuntu-24.04.ext4         # pristine rootfs, immutable per image
+│       ├── vmlinux-noble-server      # kernel binary, immutable per image
+│       └── ubuntu-24.04-server.ext4  # pristine rootfs, immutable per image
 │
 ├── virtual-machines/
 │   ├── d4f7c1a2-7e0a-4f1b-93cc-ad96b9b39b3e/
 │   │   ├── firecracker.json          # Firecracker --config-file
 │   │   ├── rootfs.ext4               # per-VM mutable rootfs
-│   │   ├── network.env               # TAP_DEVICE, VIRTUAL_MACHINE_IPV6
+│   │   ├── network.env               # TAP_DEVICE, VIRTUAL_MACHINE_IPV6, IPV4_HOST_CIDR
 │   │   ├── snapshots/                # disk snapshots of this VM
 │   │   │   └── <snapshot-uuid>/
 │   │   │       └── rootfs.ext4       # a copy taken while Stopped

@@ -81,6 +81,19 @@ behavior; they just keep doors open.
 - **Spill Task `stdout`/`stderr` over N KB to a file.** The Task row keeps a
   capped excerpt + a pointer. Avoids the DocType becoming a log store.
 
+- **Key the image-sync short-circuit to guest content, not just the rootfs.**
+  `sync-image.sh` exits early ("rootfs already built") when the unpacked rootfs
+  is present, but the guest systemd unit
+  ([`scripts/guest/atlas-network.service`](../scripts/guest/atlas-network.service))
+  is baked in at sync time — so a change to the guest unit (as the NAT44 egress
+  work made) is **invisible** to an already-synced server until the rootfs is
+  rebuilt for some other reason. Today the escape hatch is the immutable-image
+  contract: any change to a spec image field (e.g. `rootfs_filename`) makes
+  [`_image.py::ensure_image_row()`](../atlas/atlas/doctype/virtual_machine_image/virtual_machine_image.py)
+  delete-and-reinsert the row, forcing a rebuild. That works but is indirect.
+  The fix is to stamp a content digest of the guest payload into the image row
+  and key the short-circuit on it. Additive; not now.
+
 ## Concrete next steps after this iteration
 
 - **Stuck-task reaper**. A scheduled job that looks at Tasks in `Running`
@@ -123,8 +136,20 @@ behavior; they just keep doors open.
   methods we expose for buttons become the CLI's commands. Pure additive.
 
 - **Multi-arch**. Drop the `ARCHITECTURE` hard-coding; allow `aarch64`. The
-  Firecracker CI publishes aarch64 artifacts. Additive on
-  `Server` and the image record.
+  Ubuntu cloud archive publishes arm64 squashfs + `unpacked/` kernels per
+  release. Additive on `Server` and the image record.
+
+- **Ubuntu image discovery**. A "Refresh Ubuntu Images" action that scrapes
+  `cloud-images.ubuntu.com` (release dirs + `SHA256SUMS`) and upserts a
+  catalog, so operators pick a release × variant instead of hand-copying
+  `DEFAULT_IMAGE`/`MINIMAL_IMAGE` constants. Mirrors `provider.discover()` /
+  the Provider **Refresh Catalog** button. Today the images are pinned
+  constants (server + minimal noble); this is the additive follow-up.
+
+- **Newer guest release**. Bump the supported guest to Ubuntu 26.04 once it's
+  validated as a guest (it boots; the normalization checklist in
+  [08-images.md](./08-images.md) is the regression gate). Additive — a new
+  image row, same code path.
 
 ## Things on the longer-term list
 
@@ -188,9 +213,17 @@ behavior; they just keep doors open.
   cloud API. `ipv6_virtual_machine_range` is no longer assumed to be a
   /124 — any prefix length is accepted. Ubuntu 26.04 is acknowledged as
   a working (but untested) host OS.
-- `v0.4` — host hardening at bootstrap (CIS 3.3 sysctls, an sshd_config.d
+- `v0.4` — **IPv4 egress via host NAT44.** Each VM gets a private /30 on
+  `eth0` (derived from its IPv6 host-index inside `100.64.0.0/16`, no new
+  DocType/field/allocator) plus a v4 default route; the host runs
+  `net.ipv4.ip_forward=1` and one host-wide masquerade rule in the
+  `inet atlas` `postrouting` chain. Egress-only — no inbound v4, no per-VM
+  public v4; IPv6 stays the identity and the only inbound path. Verified
+  end-to-end: a booted guest reaches an IPv4-only literal through the
+  masquerade. See [06-networking.md § IPv4 egress (NAT44)](./06-networking.md).
+- `v0.5` — host hardening at bootstrap (CIS 3.3 sysctls, an sshd_config.d
   drop-in, a kernel-module blocklist, unattended security updates, KSM/swap
   off), expressed as portable `*.d` drop-ins. Three deliberate CIS deviations
-  documented (forwarding stays on, `squashfs` kept, `PermitRootLogin
-  prohibit-password`). Atlas still operates as root; the unprivileged-user +
-  jailer + AppArmor privilege-drop remains deferred.
+  documented (forwarding stays on — for both v4 and v6 — `squashfs` kept, and
+  `PermitRootLogin prohibit-password`). Atlas still operates as root; the
+  unprivileged-user + jailer + AppArmor privilege-drop remains deferred.

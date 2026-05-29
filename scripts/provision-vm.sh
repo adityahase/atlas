@@ -13,6 +13,9 @@
 #   MAC_ADDRESS           - e.g. 06:00:01:02:03:04
 #   TAP_DEVICE            - e.g. atlas-<first 10 chars of vm name>
 #   VIRTUAL_MACHINE_IPV6  - the VM's address inside the server's /124
+#   IPV4_HOST_CIDR        - host side of the per-VM NAT44 /30, e.g. 100.64.0.9/30
+#   IPV4_GUEST_CIDR       - guest side of the same /30, e.g. 100.64.0.10/30
+#   IPV4_GATEWAY          - host side address (no mask), the guest's v4 gateway
 #   SSH_PUBLIC_KEY        - injected into the rootfs
 
 set -euo pipefail
@@ -27,6 +30,9 @@ set -euo pipefail
 : "${MAC_ADDRESS:?required}"
 : "${TAP_DEVICE:?required}"
 : "${VIRTUAL_MACHINE_IPV6:?required}"
+: "${IPV4_HOST_CIDR:?required}"
+: "${IPV4_GUEST_CIDR:?required}"
+: "${IPV4_GATEWAY:?required}"
 : "${SSH_PUBLIC_KEY:?required}"
 
 # shellcheck source=lib/prepare-rootfs.sh
@@ -61,8 +67,10 @@ fi
 atlas_copy_rootfs "$source_rootfs" "$rootfs_path" "$DISK_GB"
 
 # 2. Inject this VM's identity (SSH key, network env, hostname, swap, host
-#    keys, machine-id) into the rootfs.
-atlas_inject_identity "$rootfs_path" "$VIRTUAL_MACHINE_NAME" "$VIRTUAL_MACHINE_IPV6" "$SSH_PUBLIC_KEY"
+#    keys, machine-id) into the rootfs. The v4 egress link goes into the
+#    guest's network env here too, so clone/rebuild get it for free.
+atlas_inject_identity "$rootfs_path" "$VIRTUAL_MACHINE_NAME" "$VIRTUAL_MACHINE_IPV6" \
+    "$SSH_PUBLIC_KEY" "$IPV4_GUEST_CIDR" "$IPV4_GATEWAY"
 
 # 3. Firecracker config.
 sudo install -m 0644 /dev/stdin "${vm_directory}/firecracker.json" <<EOF
@@ -97,6 +105,7 @@ EOF
 sudo install -m 0644 /dev/stdin "${vm_directory}/network.env" <<EOF
 TAP_DEVICE=${TAP_DEVICE}
 VIRTUAL_MACHINE_IPV6=${VIRTUAL_MACHINE_IPV6}
+IPV4_HOST_CIDR=${IPV4_HOST_CIDR}
 EOF
 
 # 5. Enable and start the systemd unit.
