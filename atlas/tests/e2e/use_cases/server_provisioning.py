@@ -7,6 +7,10 @@ DO to create a droplet, inserts a `Server` row, waits for SSH, runs
 This module exercises:
 
 - The happy path end-to-end against a fresh droplet ([run](#run)).
+- Host hardening: after bootstrap (and again after an idempotent re-bootstrap)
+  a probe reads back the CIS sysctl/sshd/module/update controls and asserts the
+  three deliberate deviations hold — forwarding stays on, squashfs stays
+  loadable, root keeps key-only login. See spec/03-bootstrapping.md.
 - The validation throws that guard the same code path
   ([run_against_shared](#run_against_shared)):
   - `Provider.authenticate()` (token works or 403s cleanly).
@@ -59,9 +63,13 @@ def run() -> None:
 		assert bootstrap_tasks, "no successful bootstrap Task found"
 
 		_assert_remote_layout(server_name)
+		_assert_hardening_applied(server_name)
 
-		# Idempotency: re-bootstrap on an already-Active server.
+		# Idempotency: re-bootstrap on an already-Active server, then prove the
+		# hardening state is unchanged (drop-ins are install -m overwrites, so a
+		# re-run is a clean no-op — the hardening readback must still pass).
 		server_doc.bootstrap()
+		_assert_hardening_applied(server_name)
 	except Exception:
 		elapsed = time.monotonic() - start_clock
 		print(f"server-provisioning: FAIL in {elapsed:.0f}s")
@@ -110,6 +118,21 @@ def _assert_remote_layout(server_name: str) -> None:
 	assert "vm-network-up.sh OK" in task.stdout
 	assert "vm-network-down.sh OK" in task.stdout
 	assert "firecracker-vm@.service OK" in task.stdout
+
+
+def _assert_hardening_applied(server_name: str) -> None:
+	"""Read back the host-hardening state bootstrap-server.sh applies, including
+	the three deliberate deviations (forwarding stays on, squashfs stays
+	loadable, root keeps key-only login). The probe is fail-loud, so a missing
+	or wrong control surfaces as a non-Success Task."""
+	task = run_task(
+		server=server_name,
+		script="phase-hardening-probe.sh",
+		variables={},
+		timeout_seconds=60,
+	)
+	assert task.status == "Success", task.stderr
+	assert "HARDENING PROBE OK" in task.stdout, task.stdout
 
 
 # ----- shared-server validation --------------------------------------------

@@ -25,7 +25,13 @@ keep it the source of truth.
 - No users, teams, roles, billing, quotas.
 - No CLI. We will build one later on top of the same Frappe APIs.
 - No private networking, no overlay, no IPv4 to the guest.
-- No jailer, no unprivileged user, no SELinux or AppArmor. Root everywhere.
+- No jailer, no unprivileged user, no AppArmor profile yet — Atlas still
+  operates on the host **as root**. The host *is* hardened at bootstrap
+  (CIS sysctls, an sshd drop-in, a kernel-module blocklist, unattended
+  security updates, KSM/swap off — see
+  [03-bootstrapping.md § Host hardening](./03-bootstrapping.md)); the
+  privilege-drop (unprivileged user + Firecracker jailer + AppArmor) is the
+  next step on the [roadmap](./09-roadmap.md).
 - No image build pipeline. We download Firecracker CI images and use them.
 - No Firecracker memory-state snapshots, no live migration, no high
   availability. (Disk snapshots — a copy of the VM's rootfs — are supported;

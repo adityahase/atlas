@@ -111,6 +111,13 @@ net.ipv6.conf.default.forwarding = 1
 net.ipv6.conf.all.proxy_ndp = 1
 ```
 
+These three lines are load-bearing: with no bridge, the host *routes* between
+its uplink and each per-VM tap, so forwarding must be on. This is the reason
+the host-hardening step keeps forwarding enabled **in deliberate violation of
+CIS 3.3.1** ("disable IP forwarding") — turning it off makes every VM dark.
+The same `60-atlas.conf` file also carries the CIS 3.3 network-hardening
+sysctls; see [03-bootstrapping.md § Host hardening](./03-bootstrapping.md).
+
 `proxy_ndp` is the trick that makes the DigitalOcean scheme work. Each
 VM has its address routed to a per-VM tap device, but DO's upstream
 router asks NDP "who has 2a03:b0c0:abcd:1234::2?" on the uplink (`eth0`).

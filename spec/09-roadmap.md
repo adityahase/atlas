@@ -96,11 +96,26 @@ behavior; they just keep doors open.
   a benign race that wastes bandwidth; with more operators it stops being
   benign. Additive.
 
-- **Unprivileged user on the server**. Move from `root` to an `atlas`
+- **Unprivileged user on the server + jailer + AppArmor**. The privilege-drop
+  the host hardening stopped short of. Move from `root` to an `atlas`
   user with `sudo` on a narrow allowlist. Then drop `sudo` for the
-  Firecracker binary in favor of the **jailer**. Touches the wrapper
-  that prepends `sudo` and the SSH connection layer (which user the
-  key authenticates as). Not breaking.
+  Firecracker binary in favor of the **jailer**, and apply Firecracker's
+  **AppArmor** profile (it is meant to be used *with* the jailer, so the two
+  ship together). Touches the wrapper that prepends `sudo` and the SSH
+  connection layer (which user the key authenticates as), and reverses the
+  "root everywhere" stance — a breaking change, hence its own iteration.
+  The host-level hardening (sysctls, sshd, module blocklist, security updates,
+  KSM/swap) already landed at bootstrap; see
+  [03-bootstrapping.md § Host hardening](./03-bootstrapping.md).
+
+- **More host hardening, deferred from the host-hardening iteration**:
+  `/tmp` and `/dev/shm` mount options (`nodev,nosuid,noexec` — CIS 1.1.2.x,
+  awkward on a cloud image where `/tmp` is not a separate mount), `auditd`
+  with a tuned rule set (a whole subsystem with real log volume), and
+  **surfacing "reboot pending"** after an unattended security-kernel update
+  (we deliberately do *not* auto-reboot, because that would kill running VMs —
+  so a health check should flag hosts that need an operator-scheduled reboot).
+  All additive.
 
 - **Host-key pinning**. See above.
 
@@ -173,3 +188,9 @@ behavior; they just keep doors open.
   cloud API. `ipv6_virtual_machine_range` is no longer assumed to be a
   /124 — any prefix length is accepted. Ubuntu 26.04 is acknowledged as
   a working (but untested) host OS.
+- `v0.4` — host hardening at bootstrap (CIS 3.3 sysctls, an sshd_config.d
+  drop-in, a kernel-module blocklist, unattended security updates, KSM/swap
+  off), expressed as portable `*.d` drop-ins. Three deliberate CIS deviations
+  documented (forwarding stays on, `squashfs` kept, `PermitRootLogin
+  prohibit-password`). Atlas still operates as root; the unprivileged-user +
+  jailer + AppArmor privilege-drop remains deferred.
