@@ -23,7 +23,11 @@ def default_image() -> str:
 	if configured:
 		return configured
 	active = frappe.get_all(
-		"Virtual Machine Image", filters={"is_active": 1}, pluck="name", limit=2
+		"Virtual Machine Image",
+		filters={"is_active": 1},
+		pluck="name",
+		limit=2,
+		ignore_permissions=True,
 	)
 	if not active:
 		frappe.throw("No image is available — contact your operator.")
@@ -41,11 +45,19 @@ def default_server(required_vcpus: int) -> str:
 	(atlas/api/server_capacity.py): a server's vCPU total minus the vCPUs of
 	its non-Terminated VMs. Servers whose size has no known vCPU total (e.g.
 	self-managed) are treated as having room — the operator vouches for them by
-	marking them Active. Raises when nothing fits."""
+	marking them Active. Raises when nothing fits.
+
+	Runs with ignore_permissions: this is system placement, not user-facing
+	data access. The Atlas User who triggers it cannot read Server at all (by
+	design) — but the system still has to choose one for them."""
 	from atlas.atlas.api.server_capacity import capacity_for_server
 
 	servers = frappe.get_all(
-		"Server", filters={"status": "Active"}, pluck="name", order_by="creation asc"
+		"Server",
+		filters={"status": "Active"},
+		pluck="name",
+		order_by="creation asc",
+		ignore_permissions=True,
 	)
 	if not servers:
 		frappe.throw("No capacity available — contact your operator.")

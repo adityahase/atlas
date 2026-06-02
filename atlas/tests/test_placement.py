@@ -46,6 +46,13 @@ class TestPlacement(IntegrationTestCase):
 		self.provider = make_provider("atlas-placement-provider")
 		self.addCleanup(frappe.set_user, "Administrator")
 		frappe.db.set_single_value("Atlas Settings", "default_user_image", None)
+		# Start from a clean slate: placement picks the first Active server and
+		# throws on >1 active image, so neutralize any left by other suites /
+		# fixtures so this test's own server+image are the only candidates.
+		for name in frappe.get_all("Virtual Machine Image", filters={"is_active": 1}, pluck="name"):
+			frappe.db.set_value("Virtual Machine Image", name, "is_active", 0)
+		for name in frappe.get_all("Server", filters={"status": "Active"}, pluck="name"):
+			frappe.db.set_value("Server", name, "status", "Draining")
 
 	def _new_machine(self, **overrides):
 		"""Insert a VM the way the dashboard does — no server, no image."""
@@ -62,21 +69,40 @@ class TestPlacement(IntegrationTestCase):
 		return frappe.get_doc(doc).insert()
 
 	def test_fills_server_and_image_and_owner(self) -> None:
-		server = make_server("atlas-placement-server", provider=self.provider.name)
+		# setUp drained every Active server, so this is the only candidate.
+		# Give it generous capacity so placement's vCPU check can't be the thing
+		# under test here (capacity is exercised by test_no_active_server_throws).
+		server = make_server(
+			self.provider,
+			title="atlas-placement-server",
+			size="DigitalOcean/s-4vcpu-8gb",
+			ipv6_address="2001:db8:1::1",
+			ipv6_prefix="2001:db8:1::/64",
+			ipv6_virtual_machine_range="2001:db8:1::/124",
+		)
 		image = make_image("atlas-placement-image")
+		# make_image returns an existing row if present; setUp may have just
+		# deactivated it, so re-assert active for the single-image happy path.
+		frappe.db.set_value("Virtual Machine Image", image.name, "is_active", 1)
 		frappe.db.set_value("Server", server.name, "status", "Active")
 
 		user = _atlas_user()
 		frappe.set_user(user)
 		vm = self._new_machine()
 
-		self.assertEqual(vm.server, server.name, "server filled from the active server")
+		self.assertEqual(vm.server, server.name, "server filled from the only active server")
 		self.assertEqual(vm.image, image.name, "image filled from the single active image")
 		self.assertEqual(vm.owner, user, "owner is stamped from the acting user")
 		self.assertTrue(vm.ipv6_address, "ipv6 allocated against the filled server")
 
 	def test_explicit_server_image_not_overridden(self) -> None:
-		server = make_server("atlas-placement-server", provider=self.provider.name)
+		server = make_server(
+			self.provider,
+			title="atlas-placement-server",
+			ipv6_address="2001:db8:1::1",
+			ipv6_prefix="2001:db8:1::/64",
+			ipv6_virtual_machine_range="2001:db8:1::/124",
+		)
 		image = make_image("atlas-placement-image")
 		frappe.db.set_value("Server", server.name, "status", "Active")
 		# Operator path: both supplied — placement is a no-op.
@@ -87,13 +113,19 @@ class TestPlacement(IntegrationTestCase):
 	def test_no_active_server_throws(self) -> None:
 		make_image("atlas-placement-image")
 		# A server exists but is not Active.
-		make_server("atlas-placement-server", provider=self.provider.name)
+		make_server(self.provider, title="atlas-placement-server")
 		frappe.set_user(_atlas_user())
 		with self.assertRaises(frappe.ValidationError):
 			self._new_machine()
 
 	def test_ambiguous_image_throws(self) -> None:
-		server = make_server("atlas-placement-server", provider=self.provider.name)
+		server = make_server(
+			self.provider,
+			title="atlas-placement-server",
+			ipv6_address="2001:db8:1::1",
+			ipv6_prefix="2001:db8:1::/64",
+			ipv6_virtual_machine_range="2001:db8:1::/124",
+		)
 		frappe.db.set_value("Server", server.name, "status", "Active")
 		make_image("atlas-placement-image-a")
 		make_image("atlas-placement-image-b")
@@ -102,7 +134,13 @@ class TestPlacement(IntegrationTestCase):
 			self._new_machine()
 
 	def test_configured_default_image_resolves_ambiguity(self) -> None:
-		server = make_server("atlas-placement-server", provider=self.provider.name)
+		server = make_server(
+			self.provider,
+			title="atlas-placement-server",
+			ipv6_address="2001:db8:1::1",
+			ipv6_prefix="2001:db8:1::/64",
+			ipv6_virtual_machine_range="2001:db8:1::/124",
+		)
 		frappe.db.set_value("Server", server.name, "status", "Active")
 		make_image("atlas-placement-image-a")
 		image_b = make_image("atlas-placement-image-b")

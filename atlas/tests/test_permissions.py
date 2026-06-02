@@ -153,7 +153,13 @@ class TestPermissions(IntegrationTestCase):
 		"""Insert a VM owned by `owner_email` (Frappe stamps `owner` from the
 		acting user). server/image are pre-filled so the placement defaults
 		don't run inside a perms test."""
-		server = make_server("atlas-perm-server", provider=self.provider.name)
+		server = make_server(
+			self.provider,
+			title="atlas-perm-server",
+			ipv6_address="2001:db8:1::1",
+			ipv6_prefix="2001:db8:1::/64",
+			ipv6_virtual_machine_range="2001:db8:1::/124",
+		)
 		image = make_image("atlas-perm-image")
 		previous = frappe.session.user
 		frappe.set_user(owner_email)
@@ -203,7 +209,13 @@ class TestPermissions(IntegrationTestCase):
 
 	def test_atlas_user_denied_provider_and_server(self) -> None:
 		user_a = _make_atlas_user(USER_A_EMAIL)
-		server = make_server("atlas-perm-server", provider=self.provider.name)
+		server = make_server(
+			self.provider,
+			title="atlas-perm-server",
+			ipv6_address="2001:db8:1::1",
+			ipv6_prefix="2001:db8:1::/64",
+			ipv6_virtual_machine_range="2001:db8:1::/124",
+		)
 		frappe.set_user(user_a)
 		self.assertFalse(
 			frappe.has_permission("Provider", "read", doc=self.provider.name),

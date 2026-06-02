@@ -45,6 +45,8 @@ class TestDashboardRoute(IntegrationTestCase):
 
 		# Administrator stands in for any signed-in user here — the page guard
 		# only checks "not Guest"; role-scoping is enforced at the API layer.
+		# A signed-in user gets the built SPA shell inlined as `spa_index`
+		# (the built index.html carries its own boot-data block).
 		context = frappe._dict()
 		result = dashboard.get_context(context)
-		self.assertTrue(result.get("csrf_token") is not None)
+		self.assertIn('<div id="app">', result.get("spa_index") or "")

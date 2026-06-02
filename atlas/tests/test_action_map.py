@@ -18,7 +18,6 @@ import frappe
 
 ACTIONS_JS = (
 	pathlib.Path(frappe.get_app_path("atlas"))
-	/ ".."
 	/ "frontend"
 	/ "src"
 	/ "data"

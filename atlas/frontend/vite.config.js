@@ -27,9 +27,11 @@ export default defineConfig({
     },
   },
   build: {
-    // Relative to this frontend/ dir → atlas/atlas/public/frontend, which
-    // Frappe serves at /assets/atlas/frontend/.
-    outDir: '../atlas/public/frontend',
+    // Relative to this frontend/ dir → atlas/public/frontend (the package
+    // root's public/, sibling of hooks.py), which Frappe serves at
+    // /assets/atlas/frontend/. NOT ../atlas/public (that nests one level too
+    // deep at atlas/atlas/public, where get_app_path can't find it).
+    outDir: '../public/frontend',
     emptyOutDir: true,
     target: 'es2015',
     sourcemap: true,
