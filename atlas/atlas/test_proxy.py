@@ -167,6 +167,72 @@ class TestReconcile(IntegrationTestCase):
 		_ = desired
 
 
+def _reserved_ip(ip_address: str, server: str, vm: str | None = None):
+	"""A Reserved IP row attached (in the DB) to `vm`, bypassing the vendor assign
+	+ host NAT Task that real `attach()` runs — wildcard_targets_for_region only
+	reads the row's ip_address/virtual_machine."""
+	doc = frappe.get_doc(
+		{
+			"doctype": "Reserved IP",
+			"ip_address": ip_address,
+			"server": server,
+			"provider_resource_id": f"do-{ip_address}",
+			"virtual_machine": vm,
+		}
+	)
+	return doc.insert(ignore_permissions=True)
+
+
+class TestWildcardTargets(IntegrationTestCase):
+	# A region unique to this test class, so the query never picks up proxies or
+	# Reserved IPs from a live deploy sharing this DB (and we never delete theirs).
+	REGION = "wildcardtest"
+
+	def setUp(self) -> None:
+		for name in frappe.get_all("Subdomain", filters={"region": self.REGION}, pluck="name"):
+			frappe.delete_doc("Subdomain", name, force=1, ignore_permissions=True)
+		for vm in frappe.get_all("Virtual Machine", filters={"region": self.REGION}, pluck="name"):
+			for rip in frappe.get_all("Reserved IP", filters={"virtual_machine": vm}, pluck="name"):
+				# on_trash refuses to delete an ATTACHED Reserved IP; clear the link
+				# directly (no vendor detach needed — these are DB-only test rows).
+				frappe.db.set_value("Reserved IP", rip, "virtual_machine", None)
+				frappe.delete_doc("Reserved IP", rip, force=1, ignore_permissions=True)
+			frappe.delete_doc("Virtual Machine", vm, force=1, ignore_permissions=True)
+
+	def test_gathers_aaaa_from_proxy_v6_and_a_from_attached_reserved_ip(self) -> None:
+		server = _ensure_test_server()
+		proxy_a = _proxy_vm(self.REGION)
+		proxy_a.db_set("ipv6_address", "2400:6180::a")
+		_reserved_ip("198.51.100.10", server, proxy_a.name)
+		# A proxy in another region must not leak in.
+		other = _proxy_vm("sgp1")
+		other.db_set("ipv6_address", "2400:6180::ff")
+		_reserved_ip("203.0.113.99", server, other.name)
+
+		ipv4, ipv6 = proxy.wildcard_targets_for_region(self.REGION)
+		self.assertEqual(ipv4, ["198.51.100.10"])
+		self.assertEqual(ipv6, ["2400:6180::a"])
+
+	def test_proxy_without_reserved_ip_contributes_only_aaaa(self) -> None:
+		proxy_a = _proxy_vm(self.REGION)
+		proxy_a.db_set("ipv6_address", "2400:6180::a")  # no Reserved IP attached
+		ipv4, ipv6 = proxy.wildcard_targets_for_region(self.REGION)
+		self.assertEqual(ipv4, [])
+		self.assertEqual(ipv6, ["2400:6180::a"])
+
+	def test_multiple_proxies_round_robin(self) -> None:
+		server = _ensure_test_server()
+		a = _proxy_vm(self.REGION)
+		a.db_set("ipv6_address", "2400:6180::a")
+		_reserved_ip("198.51.100.10", server, a.name)
+		b = _proxy_vm(self.REGION)
+		b.db_set("ipv6_address", "2400:6180::b")
+		_reserved_ip("198.51.100.11", server, b.name)
+		ipv4, ipv6 = proxy.wildcard_targets_for_region(self.REGION)
+		self.assertEqual(sorted(ipv4), ["198.51.100.10", "198.51.100.11"])
+		self.assertEqual(sorted(ipv6), ["2400:6180::a", "2400:6180::b"])
+
+
 class TestPushCert(IntegrationTestCase):
 	def setUp(self) -> None:
 		_ensure_test_server()

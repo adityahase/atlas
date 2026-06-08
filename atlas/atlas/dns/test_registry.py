@@ -11,7 +11,7 @@ import frappe
 from frappe.tests import IntegrationTestCase
 
 from atlas.atlas import dns
-from atlas.atlas.dns.base import AuthResult, DnsProvider
+from atlas.atlas.dns.base import AuthResult, DnsProvider, WildcardTargets
 
 
 class _StubDnsProvider(DnsProvider):
@@ -25,6 +25,9 @@ class _StubDnsProvider(DnsProvider):
 
 	def certbot_authenticator(self) -> str:
 		return "stub"
+
+	def upsert_wildcard(self, domain: str, targets: WildcardTargets) -> list[str]:
+		return [f"A *.{domain}"]
 
 
 class TestDnsProviderRegistry(IntegrationTestCase):
@@ -47,6 +50,9 @@ class TestDnsProviderRegistry(IntegrationTestCase):
 
 			def certbot_authenticator(self) -> str:
 				return "decorator-stub"
+
+			def upsert_wildcard(self, domain: str, targets: WildcardTargets) -> list[str]:
+				return []
 
 		try:
 			self.assertIs(dns._REGISTRY["DecoratorStub"], _DecoratorStub)

@@ -11,8 +11,14 @@ from typing import TYPE_CHECKING
 
 import frappe
 
+# Re-exported for callers (the TLS Certificate controller builds `dns.WildcardTargets`).
+# base.py is stdlib-only at import time, so this triggers no boto3 load.
+from atlas.atlas.dns.base import WildcardTargets
+
 if TYPE_CHECKING:
 	from atlas.atlas.dns.base import DnsProvider
+
+__all__ = ["WildcardTargets", "for_domain_provider", "register"]
 
 
 _REGISTRY: dict[str, type["DnsProvider"]] = {}

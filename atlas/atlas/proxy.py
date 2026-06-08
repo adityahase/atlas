@@ -284,6 +284,23 @@ def _proxy_vms_in_region(region: str) -> list[str]:
 	)
 
 
+def wildcard_targets_for_region(region: str) -> tuple[list[str], list[str]]:
+	"""The proxy fleet's public addresses the regional wildcard should resolve to:
+	(ipv4, ipv6). AAAA = each proxy VM's `/128`; A = the Reserved IP attached to
+	each proxy (a proxy without an attached reserved IP contributes no v4). Both are
+	round-robin sets (spec/12-proxy.md: "DNS round-robin over their v4 + v6")."""
+	ipv4: list[str] = []
+	ipv6: list[str] = []
+	for vm_name in _proxy_vms_in_region(region):
+		vm_ipv6 = frappe.db.get_value("Virtual Machine", vm_name, "ipv6_address")
+		if vm_ipv6:
+			ipv6.append(vm_ipv6)
+		reserved_ipv4 = frappe.db.get_value("Reserved IP", {"virtual_machine": vm_name}, "ip_address")
+		if reserved_ipv4:
+			ipv4.append(reserved_ipv4)
+	return ipv4, ipv6
+
+
 def _record_guest_task(
 	virtual_machine: str, script: str, variables: dict, stdout: str, stderr: str, exit_code: int
 ) -> None:

@@ -112,7 +112,36 @@ class TLSCertificate(Document):
 				pushed.append(vm_name)
 			except Exception as exception:
 				frappe.log_error(f"Cert push failed for {vm_name}: {exception}", "TLS Certificate push")
+
+		# Point the regional wildcard at the proxy fleet. The cert proves identity;
+		# this record makes `<sub>.<domain>` actually resolve to the proxies (A →
+		# their reserved IPv4, AAAA → their /128). Reconciled here so a fleet change
+		# (rebuild, reserved-IP reattach) is reflected on the next push, mirroring
+		# the cert fan-out. A DNS failure is logged, not raised: the cert is already
+		# on the proxies, and a stale wildcard shouldn't undo a successful push.
+		self._publish_wildcard(region)
 		return pushed
+
+	def _publish_wildcard(self, region: str) -> None:
+		domain_row = frappe.get_doc("Root Domain", self.root_domain)
+		ipv4, ipv6 = proxy.wildcard_targets_for_region(region)
+		if not ipv4 and not ipv6:
+			frappe.log_error(
+				f"No proxy addresses in region {region!r}; wildcard for {domain_row.domain} not published",
+				"TLS Certificate DNS",
+			)
+			return
+		try:
+			dns_provider = dns.for_domain_provider(domain_row.domain_provider)
+			records = dns_provider.upsert_wildcard(
+				domain_row.domain, dns.WildcardTargets(ipv4=ipv4, ipv6=ipv6)
+			)
+			frappe.logger().info(f"Published wildcard for {domain_row.domain}: {records}")
+		except Exception as exception:
+			frappe.log_error(
+				f"Wildcard DNS upsert failed for {domain_row.domain}: {exception}",
+				"TLS Certificate DNS",
+			)
 
 	def _set_status(self, status: str) -> None:
 		self.db_set("status", status)

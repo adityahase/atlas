@@ -24,8 +24,12 @@ Root Domain ──Issue / Renew Certificate──▶ TLS Certificate.issue()
                           │
                           ▼  _push_to_proxies(): for vm in proxies(region)
                        atlas.atlas.proxy.push_cert(vm, fullchain, privkey)   ← EXISTING
+                          │     ▼
+                          │  nginx reload on each proxy guest
+                          ▼  then publish the public routing record:
+                       dns_provider.upsert_wildcard(domain, fleet A+AAAA)
                           ▼
-                       nginx reload on each proxy guest
+                       *.<domain> A → proxy reserved IPv4s, AAAA → proxy /128s
 ```
 
 One `Root Domain` row == one region == one wildcard. `Root Domain.region` is the
@@ -37,11 +41,20 @@ know which VMs are proxies; it asks the region.
 
 Two registries under `atlas/atlas/`, each modeled on `atlas/atlas/providers/`:
 
-- **`dns/`** — the DNS-01 seam. `DnsProvider(ABC)`: `authenticate()`,
+- **`dns/`** — the DNS seam. `DnsProvider(ABC)`: `authenticate()`,
   `credential_env()` (vendor secrets as the env certbot's plugin reads),
-  `certbot_authenticator()` (the plugin NAME, e.g. `route53`). `for_domain_provider(name)`
+  `certbot_authenticator()` (the plugin NAME, e.g. `route53`), and
+  `upsert_wildcard(domain, targets)` (publish the public `*.<domain>` A/AAAA
+  records that point the regional wildcard at the proxy fleet — A → the proxies'
+  reserved IPv4s, AAAA → their `/128`s, round-robin). `for_domain_provider(name)`
   resolves a `Domain Provider` row to an instance. `Route53DnsProvider` is the
   only implementation; Cloudflare is a reserved Select option.
+
+  The challenge TXT records are certbot's job (Atlas never writes them); the
+  durable `*.<domain>` record is Atlas's, reconciled by `TLS Certificate`'s
+  `_push_to_proxies` on every issue/renew/push (so a rebuilt proxy's new `/128`
+  or a reattached reserved IP is reflected). Without it the cert proves identity
+  but `<sub>.<domain>` resolves to nothing.
 - **`tls/`** — the issuer seam. `TlsProvider(ABC)`: `authenticate()` and
   `issue(domain, dns_provider) -> IssuedCert` (on-disk PEM paths + validity
   window). `for_tls_provider(name)` resolves a `TLS Provider` row.
