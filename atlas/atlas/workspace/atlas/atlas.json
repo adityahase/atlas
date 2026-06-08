@@ -17,7 +17,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Infrastructure",
-   "link_count": 5,
+   "link_count": 8,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -37,6 +37,26 @@
    "label": "Provider",
    "link_count": 0,
    "link_to": "Provider",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Provider Size",
+   "link_count": 0,
+   "link_to": "Provider Size",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Provider Image",
+   "link_count": 0,
+   "link_to": "Provider Image",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
@@ -74,8 +94,18 @@
   {
    "hidden": 0,
    "is_query_report": 0,
+   "label": "Reserved IP",
+   "link_count": 0,
+   "link_to": "Reserved IP",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
    "label": "Workloads",
-   "link_count": 2,
+   "link_count": 3,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -85,6 +115,16 @@
    "label": "Virtual Machine",
    "link_count": 0,
    "link_to": "Virtual Machine",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Virtual Machine Snapshot",
+   "link_count": 0,
+   "link_to": "Virtual Machine Snapshot",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"
