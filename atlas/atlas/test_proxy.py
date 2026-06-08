@@ -188,6 +188,11 @@ class TestPushCert(IntegrationTestCase):
 		self.assertIn("privkey.pem", commands[1])
 		self.assertIn("0600", commands[1])
 		self.assertEqual(stdins[1], "PRIV")
+		# Last command repoints the flat cert symlink at this region's dir, then
+		# reloads — so the pushed cert (region-scoped) is what nginx serves.
+		self.assertIn("ln -sfn", commands[2])
+		self.assertIn("blr1/fullchain.pem", commands[2])
+		self.assertIn(f"{proxy.CERT_DIRECTORY}/fullchain.pem", commands[2])
 		self.assertIn("nginx", commands[2])
 		self.assertIn("reload", commands[2])
 
@@ -273,6 +278,11 @@ class TestBuildProxy(IntegrationTestCase):
 		self.assertIn("build.sh", build_command)
 		self.assertIn("blr1", build_command)
 		self.assertIn(proxy.REGION_FILE, build_command)
+		# The build must NOT repoint the cert symlink: build.sh leaves it on the
+		# _placeholder cert (which exists) so nginx starts; push_cert repoints to
+		# certs/<region>/ only after the real cert lands there. Repointing here
+		# would dangle the symlink and nginx would fail to load its cert at start.
+		self.assertNotIn("ln -sfn", build_command)
 		self.assertIn("systemctl restart atlas-proxy.service", build_command)
 
 	def test_records_a_task_row(self) -> None:

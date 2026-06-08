@@ -134,10 +134,13 @@ def push_cert(virtual_machine: str, fullchain: str, privkey: str) -> None:
 			connection, key_path, f"{cert_dir}/fullchain.pem", fullchain, mode="0644", make_dir=cert_dir
 		)
 		_write_guest_file(connection, key_path, f"{cert_dir}/privkey.pem", privkey, mode="0600")
+		# Point the flat cert symlink nginx reads at this region's dir (idempotent;
+		# self-sufficient so a cert push takes effect even on a guest whose symlink
+		# still aims at the build-time _placeholder), then reload.
 		stdout, stderr, code = run_ssh(
 			connection,
 			key_path,
-			"/opt/atlas-proxy/sbin/nginx -s reload",
+			f"{_point_cert_symlink_command(region)} && /opt/atlas-proxy/sbin/nginx -s reload",
 			timeout_seconds=60,
 		)
 	_record_guest_task(virtual_machine, "proxy-push-cert", {"region": region}, stdout, stderr, code)
@@ -181,8 +184,14 @@ def build_proxy(virtual_machine: str) -> None:
 			run_scp(connection, key_path, str(local), remote, timeout_seconds=300)
 		# Run the build (long: compiles nginx + luajit2 from source), then write
 		# the real region (build.sh leaves it empty) and (re)start the unit so
-		# init_by_lua picks the region up. `systemctl restart` is a no-op-to-start
-		# on a guest with no running unit yet, and a clean restart on a rebuild.
+		# init_by_lua picks the region up. We deliberately do NOT repoint the cert
+		# symlink here: build.sh aims the flat certs/{fullchain,privkey}.pem at the
+		# `_placeholder` cert (which exists), so nginx starts with a valid cert.
+		# Repointing to certs/<region>/ happens in push_cert, AFTER the real cert
+		# is written there — repointing now would dangle the symlink (certs/<region>/
+		# doesn't exist yet) and nginx would fail to load the cert at start.
+		# `systemctl restart` is a no-op-to-start on a guest with no running unit
+		# yet, and a clean restart on a rebuild.
 		build = (
 			f"chmod +x {REMOTE_PROXY_DIRECTORY}/build.sh && "
 			f"{REMOTE_PROXY_DIRECTORY}/build.sh && "
@@ -231,6 +240,20 @@ def _write_guest_file(
 	_stdout, stderr, code = run_ssh(connection, key_path, command, timeout_seconds=60, stdin=content)
 	if code != 0:
 		frappe.throw(f"Writing {path} to guest failed (exit {code}): {stderr[-300:]}")
+
+
+def _point_cert_symlink_command(region: str) -> str:
+	"""Shell to repoint the flat cert path nginx reads (CERT_DIRECTORY/{fullchain,
+	privkey}.pem) at this region's cert dir. nginx's static ssl_certificate can't
+	interpolate the region, so it reads a flat symlink; build.sh aims it at the
+	`_placeholder` region, and this moves it to certs/<region>/ once the real cert
+	is in place. Relative targets (so the link stays valid regardless of where
+	certs/ is mounted) and `-n` so we replace the link, not follow it on a re-run.
+	Idempotent."""
+	return (
+		f"ln -sfn {shlex.quote(f'{region}/fullchain.pem')} {shlex.quote(f'{CERT_DIRECTORY}/fullchain.pem')} && "
+		f"ln -sfn {shlex.quote(f'{region}/privkey.pem')} {shlex.quote(f'{CERT_DIRECTORY}/privkey.pem')}"
+	)
 
 
 def _curl_command(method: str, path: str, data_stdin: bool = False) -> str:

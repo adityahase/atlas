@@ -316,7 +316,9 @@ Inside the proxy guest's rootfs:
 
 /var/lib/atlas-proxy/
   map.json                        # the persisted map (§4.3) — written by nginx
+  region                          # the active region — read by init_by_lua
   certs/<region>/                 # fullchain.pem, privkey.pem — pushed by Atlas
+  certs/{fullchain,privkey}.pem   # flat symlinks -> <region>/ (what nginx reads, §5.3)
 /var/log/atlas-proxy/
   access.log  error.log  admin.log
 /run/atlas-proxy/
@@ -502,8 +504,8 @@ does HTTP-01 for a non-wildcard cert — harmless to keep.)
 **Updated from the stale `proxy.conf`** per current best practice:
 
 ```nginx
-ssl_certificate     /var/lib/atlas-proxy/certs/<region>/fullchain.pem;
-ssl_certificate_key /var/lib/atlas-proxy/certs/<region>/privkey.pem;
+ssl_certificate     /var/lib/atlas-proxy/certs/fullchain.pem;   # flat symlink -> <region>/fullchain.pem
+ssl_certificate_key /var/lib/atlas-proxy/certs/privkey.pem;     # flat symlink -> <region>/privkey.pem
 
 ssl_protocols TLSv1.2 TLSv1.3;
 ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
@@ -517,9 +519,16 @@ ssl_session_tickets off;
 add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
 ```
 
-The cert/key are **pushed into the guest by Atlas over SSH** (§7), not baked
-into the image (so the same proxy image serves any region and a renewed cert is
-a re-push, not a rebuild).
+The cert/key live **region-scoped on disk** at `certs/<region>/{fullchain,privkey}.pem`
+(where Atlas pushes them, §7.3), but nginx's `ssl_certificate` is a static
+directive that **cannot interpolate** the region (`$atlas_region` is a Lua var,
+unavailable to `ssl_certificate` without `ssl_certificate_by_lua`). So nginx reads
+a **flat `certs/{fullchain,privkey}.pem` symlink** that points into the active
+region's dir: `build.sh` aims it at a `_placeholder` region (so `nginx -t` and the
+first boot succeed before any push), and `build_proxy`/`push_cert` repoint it to
+`certs/<region>/` once the real cert is in place. The cert/key are **pushed into
+the guest by Atlas over SSH** (§7), not baked into the image (so the same proxy
+image serves any region and a renewed cert is a re-push, not a rebuild).
 
 **Two deliberate changes vs the old config:**
 
