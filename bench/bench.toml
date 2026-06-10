@@ -1,0 +1,51 @@
+# Golden bench image config (plans/self-serve/01-golden-image.md). build.sh
+# drops this over bench-cli's generated bench.toml so the baked image pins the
+# Frappe branch and the MariaDB credentials, not bench-cli's moving template.
+# After `bench init`, build.sh also bakes a site under the fixed name
+# `site.local`; deploy-site.py renames it to the per-VM FQDN at deploy time.
+#
+# MariaDB root_password: baked, fixed, and SHARED across every VM from this
+# image — and that is correct here. Each VM is single-tenant: its MariaDB binds
+# localhost only (no public port, the south hop reaches Frappe's :80, not 3306),
+# so the db secret never crosses a VM boundary. The per-SITE secret that DOES
+# vary — the Frappe Administrator password — is generated per VM by
+# deploy-site.py at site-creation time (plans/self-serve/03), never baked here.
+# (Resolves 01's + 03's shared "where does the db secret live" open question:
+# db root password = baked localhost-only; site admin password = per-site.)
+
+[bench]
+name = "atlas"
+python = "3.14"
+
+[[apps]]
+name = "frappe"
+repo = "https://github.com/frappe/frappe"
+branch = "version-16"
+
+[mariadb]
+host = "localhost"
+port = 3306
+root_password = "atlas"
+
+[redis]
+port = 13000
+
+# Production serving: bench-cli's OWN nginx fronts every site by Host header on
+# :80 (the port the EDGE proxy's south hop dials — spec/12-proxy.md). deploy-site.py
+# runs `bench setup production`, which needs nginx.enabled + reads http_port; it
+# also flips dns_multitenant on (Host-header routing). TLS still terminates at the
+# edge proxy, NOT here — there is no in-guest certbot (plans/self-serve/03 open Q).
+[nginx]
+enabled = true
+http_port = 80
+
+[workers]
+default = 2
+short = 1
+long = 1
+
+[admin]
+port = 8002
+enabled = false
+timeout = 180
+password = "atlas-admin"
