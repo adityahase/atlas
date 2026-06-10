@@ -14,6 +14,22 @@ streams output and raises on non-zero — reduced to the slice Atlas needs.
 import shlex
 import subprocess
 import sys
+import time
+
+
+def _trace(argv: list[str]) -> float:
+	"""Echo the `set -x` trace line for `argv` to stderr and return a monotonic
+	start time. Pair with `_traced` to print the command's wall-clock duration on
+	the same trace stream, so the Task log shows which commands are slow."""
+	print("+ " + shlex.join(argv), file=sys.stderr, flush=True)
+	return time.monotonic()
+
+
+def _traced(argv: list[str], start: float) -> None:
+	"""Close the trace opened by `_trace`: print `+ (<elapsed>) <command>` so each
+	command's duration sits next to its invocation in the Task log (stderr)."""
+	elapsed = time.monotonic() - start
+	print(f"+ ({elapsed:.3f}s) {shlex.join(argv)}", file=sys.stderr, flush=True)
 
 
 class CommandError(RuntimeError):
@@ -41,8 +57,9 @@ def run(*argv: str, check: bool = True, quiet: bool = False) -> str:
 	  tracing already in the Task log and never pollutes stdout that a caller
 	  parses (e.g. blockdev --getsize64).
 	"""
-	print("+ " + shlex.join(argv), file=sys.stderr, flush=True)
+	start = _trace(list(argv))
 	result = subprocess.run(argv, capture_output=True, text=True, check=False)
+	_traced(list(argv), start)
 	if result.stderr and not quiet:
 		sys.stderr.write(result.stderr)
 		sys.stderr.flush()
@@ -64,8 +81,9 @@ def run_input(*argv: str, stdin: str) -> str:
 	`printf ... | sudo cmd` or a heredoc piped into `install /dev/stdin`. Echoes
 	the command (the set -x trace), raises CommandError on non-zero, returns
 	stdout."""
-	print("+ " + shlex.join(argv), file=sys.stderr, flush=True)
+	start = _trace(list(argv))
 	result = subprocess.run(argv, input=stdin, capture_output=True, text=True, check=False)
+	_traced(list(argv), start)
 	if result.stderr:
 		sys.stderr.write(result.stderr)
 		sys.stderr.flush()
