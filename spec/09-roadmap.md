@@ -335,3 +335,33 @@ behavior; they just keep doors open.
   `atlas-image-<image>`). Verified end-to-end on a DO droplet: a jailed,
   chrooted, de-privileged Firecracker boots off a thin LV. See
   [07-filesystem-layout.md § Why LVM thin volumes](./07-filesystem-layout.md#why-lvm-thin-volumes-for-per-vm-disks).
+- `v0.7` — **Reverse proxy.** A TLS-terminating reverse proxy that fronts many
+  Frappe sites under a regional wildcard (`*.<region>.frappe.dev`), built as an
+  ordinary operator-owned `Virtual Machine` (`is_proxy` + `region`) running a
+  self-built nginx + Lua stack ([`proxy/`](../proxy)). The live routing map is a
+  `lua_shared_dict` updated by an atomic dict write — **zero nginx reload**. Each
+  `Subdomain` row maps one subdomain → one site VM's `/128` (dialed over public
+  IPv6 on `:80`); 2–3 proxy VMs per region each hold the whole regional map, and
+  Atlas reconciles each proxy's live map over SSH. Inbound v4 **and** v6 on
+  `:443` via an attached `public_ipv4` (the Reserved IP primitive). See
+  [12-proxy.md](./12-proxy.md).
+- `v0.8` — **TLS & domain layer.** The producer for the wildcard cert the proxy
+  consumes. Two small registries (DNS, TLS) mirror the compute `Provider` ABC,
+  resolved by name. `Root Domain` → **Issue / Renew Certificate** issues the
+  regional `*.<region>.frappe.dev` wildcard via Let's Encrypt over a DNS-01
+  challenge (`issue-cert.py` runs on the **controller**, a host dependency:
+  certbot, certbot-dns-route53, openssl, boto3), pushes the PEMs onto every proxy
+  VM in the region (`push_cert`), and publishes the public `*.<domain>` A/AAAA at
+  the proxy fleet (`upsert_wildcard`). One `Root Domain` = one region = one
+  wildcard. See [13-tls.md](./13-tls.md).
+- `v0.9` — **Self-serve sites.** Signup → email-verify → live Frappe site in a
+  few-seconds flow, layered on the proxy + TLS halves. Two new user-owned
+  DocTypes: `Site Request` (the pre-verification holding row — email + subdomain
+  + token; **no** droplet/site work until the email is verified, Contract C) and
+  `Site` (the verified user's aggregate, keyed by the **one routing string**
+  `<subdomain>.<region domain>` that is at once site-name-on-disk, proxy Host
+  header, and `Site` key — Contract A). Fulfilment clones the golden bench
+  snapshot (`Atlas Settings.default_bench_snapshot`), runs `deploy-site.py` in the
+  guest, and flips the Site to `Running` **only on an observed HTTP 200** from
+  `:80` (Contract B), then creates the `Subdomain`. A `/signup` www page + guest
+  API is the one guest-reachable surface. See [14-self-serve.md](./14-self-serve.md).

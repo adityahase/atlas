@@ -223,6 +223,61 @@ This means a freshly booted VM comes up with the right IPv6, the right SSH
 key, and a working internet route within ~2 seconds of `systemctl start` —
 and disk creation is **instant** (a CoW snapshot, not a multi-second copy).
 
+## The golden bench image (self-serve)
+
+Self-serve site VMs don't boot the plain `ubuntu-24.04` image — they boot a
+**golden bench image**: the same Ubuntu rootfs with bench-cli, its uv venv, the
+Frappe clone, MariaDB + Redis already installed and enabled, **and a
+fully-created Frappe site baked under the fixed name `site.local`**. Baking that
+once means `deploy-site.py` (the in-guest deploy) does only the per-site work —
+**rename** the baked site to the per-VM FQDN (a directory move) + reset its admin
+password + `setup production` — not a multi-minute `bench new-site` per signup.
+
+The golden image is a **`Virtual Machine Snapshot`, not a from-URL
+`Virtual Machine Image`** — it is built *inside* a VM and snapshotted, the same
+build-in-guest pattern the proxy uses ([12-proxy.md](./12-proxy.md)):
+
+1. Provision a plain `ubuntu-24.04` VM on a server in the region.
+2. `atlas.atlas.bench_image.build_bench(<vm>)` uploads the committed
+   [`bench/`](../bench/) tree and runs `bench/build.sh` over guest-SSH — the
+   sibling of `proxy.build_proxy`. `build.sh` installs bench-cli at a pinned
+   commit, drops the committed [`bench/bench.toml`](../bench/bench.toml), and
+   runs `bench init` (the heavy, per-site-invariant step: apt MariaDB + Redis,
+   uv venv, Frappe clone, Node + npm deps, admin frontend), then bakes a
+   `site.local` site (`bench new-site`, past the setup-wizard gate). It leaves
+   the bench **stopped, with the baked site in place**.
+3. Stop the VM and `Virtual Machine.snapshot(...)` it. That snapshot **is** the
+   golden image; site VMs clone from it via
+   `Virtual Machine Snapshot.clone_to_new_vm`.
+
+We deliberately do **not** chroot-bake the rootfs at sync time: apt's
+MariaDB/Redis postinst maintainer scripts expect a running init, which a bare
+chroot lacks. Building in a real booted guest sidesteps that and reuses the
+existing snapshot machinery for the rollable artifact. The bake is driven by the
+[`bench_image`](../atlas/tests/e2e/use_cases/bench_image.py) operator action
+(provision → build → stop → snapshot → assert `bench` runs over guest-SSH).
+
+**The db secret.** `bench.toml` carries a fixed, baked MariaDB `root_password`
+shared across every VM from this image — correct because each VM is
+single-tenant and MariaDB binds localhost only (the south hop reaches Frappe's
+`:80`, never `3306`). The per-site secret that *does* vary — the Frappe
+Administrator password — is generated per VM by `deploy-site.py`, never baked:
+the baked `site.local` has a throwaway admin password, which `deploy-site.py`
+**resets** to the freshly generated per-VM secret right after the rename, so the
+baked one never reaches a user.
+
+**Why rename, not `bench new-site`.** In bench-cli a site's identity *is its
+directory name* under `sites/` — nginx's `server_name` is the dir name, Frappe
+resolves the `Host` header to `sites/<host>/`, and the db name lives in that
+dir's `site_config.json` (so it travels with the move; no DB rename). So the
+per-site routing identity (Contract A) is satisfied by `mv sites/site.local
+sites/<fqdn>` + an nginx regen — a sub-second move instead of the multi-minute
+schema-create + frappe-install `bench new-site` pays, which is baked once here.
+
+Versions are pinned (bench-cli commit in `build.sh`, Frappe branch in
+`bench.toml`); bumping any is a deliberate update rolled as a new golden
+snapshot, the same discipline `proxy/build.sh`'s pins follow.
+
 ## Verification
 
 Every download is checksummed against the value on the image record.

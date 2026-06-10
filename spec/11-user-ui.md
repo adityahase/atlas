@@ -38,6 +38,7 @@ hand is refused.
 | Virtual Machine          | all rows, all perms       | **own rows** (`if_owner`): read/write/create/delete |
 | Virtual Machine Snapshot | all rows, all perms       | **own rows** (`if_owner`): read/create/delete |
 | SSH Key                  | all rows, all perms       | **own rows** (`if_owner`): read/write/create/delete |
+| Site                     | all rows, all perms       | **own rows** (`if_owner`): read/write/create/delete |
 | Virtual Machine Image    | all rows, all perms       | **read, all rows** (shared base images)     |
 | Task                     | all rows (read; no delete)| **read, only Tasks of an owned VM**         |
 | Provider / Server        | all rows, all perms       | **no access**                               |
@@ -49,12 +50,24 @@ Mechanics (all in `atlas/atlas/permissions.py`, wired in `hooks.py`):
 - **Ownership = Frappe's built-in `owner`.** No owner field is added; Frappe
   stamps `owner` on insert. A user owns the VMs/Snapshots they create.
 - **`if_owner: 1`** permission rows on Virtual Machine, Virtual Machine
-  Snapshot, and SSH Key for the `Atlas User` role restrict the user to their own
-  rows.
+  Snapshot, SSH Key, and Site for the `Atlas User` role restrict the user to
+  their own rows.
 - **`permission_query_conditions`** scope list views / `get_list`:
-  - Virtual Machine, Virtual Machine Snapshot, SSH Key → `owner = <user>`.
+  - Virtual Machine, Virtual Machine Snapshot, SSH Key, Site, Site Request →
+    `owner = <user>`.
   - Task → only Tasks whose `virtual_machine` is owned by the user.
   - System Manager → unrestricted (empty condition).
+
+**The one guest-reachable surface.** Almost the entire SPA is login-gated
+(`/dashboard` bounces a Guest to `/login`). The exception is the public **signup**
+on-ramp ([14-self-serve.md](./14-self-serve.md)): the server-rendered `/signup`
+page + the guest API `atlas.atlas.api.signup.request_site`, and the `/verify`
+route the emailed link lands on. These are deliberately guest-accessible (a
+visitor has no account yet); everything else requires a session. Verification
+*creates* the account (a Website User with the `Atlas User` role) and logs them
+in, after which the scoping above applies. The user-facing **Sites screen** (list
++ create-from-subdomain, in the SPA) is the remaining plan-04 SPA work; the
+permission layer above already scopes it.
 - **`has_permission` on Task** guards single-document reads: a user may read a
   Task only if they own its linked VM. Task has no `if_owner` (Tasks are
   stamped with the system user, not the requesting user), so this hook + the

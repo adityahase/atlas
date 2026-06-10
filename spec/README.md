@@ -112,6 +112,7 @@ keep it the source of truth.
 11. [User UI — the dashboard SPA](./11-user-ui.md)
 12. [The reverse proxy](./12-proxy.md)
 13. [TLS & domain layer](./13-tls.md)
+14. [Self-serve sites](./14-self-serve.md)
 
 ## First run on a fresh site
 
@@ -241,8 +242,8 @@ filenames mirror the table above (`server_provisioning.py`,
 `image_sync.py`, `virtual_machine_provisioning.py`,
 `virtual_machine_lifecycle.py`, `virtual_machine_snapshot.py`,
 `reserved_ip_inbound.py`, `proxy_vm.py`, `tls_issuance.py`,
-`run_task.py`, `desk_buttons.py`, `digitalocean_client.py`,
-`ssh_primitive.py`).
+`self_serve_site.py`, `run_task.py`, `desk_buttons.py`,
+`digitalocean_client.py`, `ssh_primitive.py`).
 
 Each use-case module is the **single source of truth** for that
 operation's end-to-end coverage. It owns:
@@ -347,6 +348,21 @@ DNS-01 → certbot → `_push_to_proxies`); `proxy_vm` uses a self-signed
 stand-in cert. It needs the controller-host deps (certbot,
 certbot-dns-route53, openssl, boto3) and fails its preflight with a clear
 message if they are absent.
+
+The **self-serve site** use case (`self_serve_site.run_smoke`) is the
+superset of all of the above: it drives the real signup → email-verify →
+golden-image site VM → deploy → HTTP 200 → subdomain → off-droplet HTTPS
+flow on **both IPv4 and IPv6**. It reuses `proxy_vm`'s proxy + reserved-IP
+helpers, `tls_issuance`'s real LE-staging producer chain, and `bench_image`'s
+golden-snapshot bake, so it has the same preconditions (the `atlas_tls_*`
+config keys + controller-host deps) and skips cleanly on a bare site. It
+needs a golden bench snapshot: it uses `Atlas Settings.default_bench_snapshot`
+if set + Available, else bakes one inline before any billable site provision.
+It also asserts the **Contract-C negative** on the real path — an unverified
+`Site Request` provisions no Site and no VM. Like `tls_issuance`, it is
+invoked directly (not folded into `run_all_smoke`); its `auto_provision`
+chain is driven by the **background worker** (the same worker the VM
+provisioning e2e relies on), so the worker must be up.
 
 Every e2e-created droplet is tagged `atlas-e2e`. The harness pre-sweep
 prints droplets older than 30 minutes so the operator can delete them

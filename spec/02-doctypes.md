@@ -1,6 +1,6 @@
 # DocTypes
 
-Twenty DocTypes. Module `Atlas`. None are submittable. All track changes.
+Twenty-two DocTypes. Module `Atlas`. None are submittable. All track changes.
 Read permission for `System Manager`.
 
 1. [Atlas Settings](#atlas-settings) — vendor-agnostic Atlas config (Single).
@@ -23,6 +23,8 @@ Read permission for `System Manager`.
 18. [Lets Encrypt Settings](#lets-encrypt-settings) — ACME account config (Single).
 19. [Root Domain](#root-domain) — one wildcard zone == one region.
 20. [TLS Certificate](#tls-certificate) — the issued regional wildcard cert.
+21. [Site](#site) — a user's self-serve Frappe site at `<subdomain>.<region domain>`. See [14-self-serve.md](./14-self-serve.md).
+22. [Site Request](#site-request) — the pre-verification signup holding row (email + subdomain + token); fulfils into a `Site` only after the email is verified (Contract C). See [14-self-serve.md](./14-self-serve.md).
 
 The first six form the **Provider abstraction**: a single ABC in
 `atlas/atlas/providers/base.py` with one implementation per
@@ -67,6 +69,7 @@ indirection layer.
 | ---------------------- | ---------------- | ---- | ------------------------------------------------------------------ |
 | `provider`             | Link → Provider  | Y    | The currently-active Provider row. `atlas.get_provider()` reads this. |
 | `default_user_image`   | Link → Virtual Machine Image | | Base image a dashboard user's new machine provisions from when they don't pick one. Disambiguates placement when several images are active. See [11-user-ui.md](./11-user-ui.md). |
+| `default_bench_snapshot` | Link → Virtual Machine Snapshot | | The golden bench snapshot a self-serve `Site`'s backing VM is cloned from (the baked bench + MariaDB + Redis, [01-golden-image](../llm/plans/self-serve/01-golden-image.md)). `Site.before_insert` placement resolves it; provisioning clones via `Virtual Machine Snapshot.clone_to_new_vm`. Must be set + `Available` before any Site is created. See [14-self-serve.md](./14-self-serve.md). |
 | `overprovision_factor` | Float            |      | Fleet-wide vCPU oversubscription multiplier (default `1`). A host's *effective* vCPU budget — what `default_server` placement and the desk capacity helper check against — is its physical vCPU total times this factor. `1` means no oversubscription. Safe to raise because a VM's `vcpus` is a `cpu.max` *bandwidth* cap, not a pinned core. A host whose size has no known vCPU total (uncatalogued slug or self-managed) is unaffected — it always counts as having room. See [server_capacity.py](../atlas/atlas/api/server_capacity.py) and `placement.py`. |
 | `ssh_key_id`           | Data             |      | Vendor's handle for the uploaded SSH key, when the vendor needs one (DigitalOcean). Passed through to the provider as `SshKey.vendor_id`; format is vendor-specific (DO accepts the key's numeric id or its SHA-256 fingerprint). |
 | `ssh_public_key`       | Long Text        |      | OpenSSH public key body. Crosses the provider interface for vendors that upload at provision time. Not required for DO. |
@@ -1223,3 +1226,123 @@ privkey_path
 
 - Columns: `root_domain`, `common_name`, `status`.
 - Standard filters: `status`, `expires_on`.
+
+## Site
+
+The user-facing self-serve resource: "my Frappe site at `acme.blr1.frappe.dev`".
+A `Site` is the user-owned aggregate that ties the one routing identity
+(Contract A) to the backing VM it clones from the golden bench snapshot and the
+readiness state (Contract B). It is **not** the [Subdomain](#subdomain) (the
+proxy map it creates once serving) and **not** the
+[Virtual Machine](#virtual-machine) (which it owns/creates). Full lifecycle in
+[14-self-serve.md](./14-self-serve.md).
+
+### Fields
+
+| Field           | Type                   | Reqd | Read-only | Notes                                                       |
+| --------------- | ---------------------- | ---- | --------- | ----------------------------------------------------------- |
+| `name`          | the FQDN               | Y    | Y         | Primary key, built in `autoname()` as `<subdomain>.<region domain>` — the one routing string (Contract A): site-name-on-disk == proxy Host header == this key. Never transformed. |
+| `subdomain`     | Data                   | Y    |           | The bare DNS label the user chose (`acme`). `set_only_once`. A single label, no dots, lowercase `[a-z0-9-]`, ≤63 chars, no leading/trailing hyphen; not in the reserved denylist. |
+| `region`        | Data                   |      | Y         | `set_only_once`. Resolved from the single active `Root Domain` at insert (the user never picks it). |
+| `status`        | Select                 |      | Y         | `Pending` → `Provisioning` → `Deploying` → `Running` / `Failed` / `Terminated`. Controller-written. `Running` is reached **only** on an observed HTTP 200 from the guest `:80` (Contract B), not when the backing VM boots. |
+| `virtual_machine` | Link → Virtual Machine |    | Y         | `set_only_once`. The backing VM, cloned from the golden bench snapshot by the background job (the user never picks it). |
+| `subdomain_doc` | Link → Subdomain       |      | Y         | The proxy-map row the site created once it began serving. Deleting it (or the Site) takes the site off the front door. |
+| `admin_password` | Password              |      | Y         | The Frappe Administrator password generated per-site by the in-guest deploy (the db root password is baked + shared; only this varies per site). Stored encrypted; shown once to the owner in the SPA so they can sign in. Controller-written. |
+
+`owner` (Frappe built-in) is the verified user (Contract C) — the ownership key,
+scoped by `permission_query_conditions` (`atlas.atlas.permissions.owner_only`).
+
+### Validation
+
+- **Single label, no dots** + DNS-label rules — a dot would escape the one
+  regional wildcard the proxy terminates (would need its own cert; deferred).
+- **Reserved denylist** — `www admin api proxy app dashboard mail ns root`
+  (module-level `RESERVED_SUBDOMAINS`). Anything else already taken is caught by
+  the FQDN-key uniqueness check, which throws a clean *"subdomain taken"* (the
+  signup race, [04-signup-verification](../llm/plans/self-serve/04-signup-verification.md)).
+- **Immutability** — `subdomain`, `region`, `virtual_machine` are frozen after
+  insert (`IMMUTABLE_AFTER_INSERT`, guarded in `validate()`).
+
+### Controller methods & lifecycle
+
+- `before_insert()` — validate the label, resolve the region from the active
+  `Root Domain`, set `status = Pending`. (`owner` is stamped by Frappe from the
+  session user; never set here.)
+- `autoname()` — build the FQDN key from `subdomain` + the region domain.
+- `after_insert()` — enqueue `auto_provision` (`queue="long"`, it SSHes).
+- `auto_provision(site_name)` *(module function)* — the background entrypoint:
+  clone the backing VM from `Atlas Settings.default_bench_snapshot` →
+  `wait_for_ssh` → run `deploy-site.py` in the guest (plan 03) → `wait_for_http`
+  for the 200 (plan 03) → create the `Subdomain` row → `status = Running`. Any
+  failure flips `Failed` and re-raises (fail loud). No-op past `Pending`.
+- `terminate()` — delete the `Subdomain` (proxy stops routing), terminate the
+  backing VM, set `Terminated`. Mirrors `VirtualMachine.terminate()`'s
+  cleanup-then-mark shape.
+
+### Permissions
+
+`Atlas User` with `if_owner` for CRUD; `System Manager` full. List scoping via
+`owner_only` (`Site` ∈ `_OWNED_DOCTYPES`).
+
+### List view
+
+- Columns: `subdomain`, `region`, `status`.
+- Standard filters: `region`, `status`.
+
+## Site Request
+
+The pre-verification holding row for self-serve signup (Contract C, plan 04). A
+guest submits an email + subdomain; we hold the intent here (status `Pending`,
+with a verification token) and email a link. **Only when that link is clicked**
+do we create the [User](#) and insert the [Site](#site) — no droplet/site
+(billable) work happens for an unverified email. A `Site Request` is **not** a
+`Site`: it carries the intent + the verification state, no VM and no routing.
+Full flow in [14-self-serve.md](./14-self-serve.md).
+
+### Fields
+
+| Field         | Type     | Reqd | Read-only | Notes                                                       |
+| ------------- | -------- | ---- | --------- | ----------------------------------------------------------- |
+| `name`        | hash     | Y    | Y         | Random (`autoname: hash`). The token, not the name, is the verification secret in the URL — so the secret can expire without renaming the row. |
+| `email`       | Data (Email) | Y |          | The unverified address that submitted the form; becomes the `Site`'s `owner` on fulfilment (Contract C). `set_only_once`. Not a Link to User — no User exists until verification. |
+| `subdomain`   | Data     | Y    |           | The bare DNS label the user wants. Validated with the **same Contract-A rules as `Site`** (shared `atlas.atlas.subdomain_label`) so a request can't reserve a name `Site` would reject. `set_only_once`. |
+| `region`      | Data     |      | Y         | Resolved from the single active `Root Domain` at request time (the user never picks it). `set_only_once`. |
+| `status`      | Select   |      | Y         | `Pending` → `Verified` → `Fulfilled`; `Expired` once the token TTL lapses. Controller-written. |
+| `token`       | Data     |      | Y         | The verification secret (`frappe.generate_hash(length=32)`). The emailed link carries it; the verify route looks the request up by it. Never shown in list views. |
+| `verified_at` | Datetime |      | Y         | When the user actually clicked the link (status → Verified). The expiry clock is the row's built-in `creation` + TTL, **not** this. |
+| `site`        | Link → Site |   | Y         | The `Site` produced on fulfilment. Set once. |
+
+`owner` (Frappe built-in) starts as `Guest` (the form is guest-writable) and is
+re-stamped to the verified user at fulfilment (`db_set` — `owner` is a constant
+field), so the `owner_only` scoping shows a user only their own request.
+
+### Validation
+
+- **Label** — the shared Contract-A rule (single dotless DNS label, not reserved),
+  identical to `Site`. The authoritative uniqueness is still `Site`'s FQDN key at
+  fulfilment; the signup API additionally rejects a label already taken by a live
+  `Site` at request time (best-effort early feedback).
+
+### Controller methods & lifecycle
+
+- `before_insert()` — validate + normalize the label, resolve `region`, mint the
+  `token`, set `status = Pending`.
+- `is_expired()` — `creation + TOKEN_TTL_HOURS` (24h) is past. Both sides coerced
+  to datetime (the str-vs-datetime date trap).
+- `verify()` — fulfilment (Contract C step 5-6), all server-side: get-or-create
+  the `User` (Website User + `Atlas User` role, `send_welcome_email = 0`), insert
+  the `Site` **as that user** so Frappe stamps `owner = user`, mark `Fulfilled`,
+  link `site`, re-own the request to the user. Idempotent: a second call returns
+  the existing `Site`. Throws (clean message) on an expired token or a label
+  taken since the request.
+
+### Permissions
+
+`System Manager` full; `Atlas User` `if_owner` read only (no create/write — the
+guest API creates it, fulfilment re-owns it). List scoping via `owner_only`
+(`Site Request` ∈ `_OWNED_DOCTYPES`).
+
+### List view
+
+- Columns: `email`, `subdomain`, `status`.
+- Standard filters: `status`.
