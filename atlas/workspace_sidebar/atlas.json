@@ -66,6 +66,18 @@
    "type": "Link"
   },
   {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "hammer",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Image Build",
+   "link_to": "Image Build",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
    "child": 0,
    "collapsible": 1,
    "icon": "server",
@@ -108,6 +120,41 @@
    "keep_closed": 0,
    "label": "Task",
    "link_to": "Task",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 0,
+   "collapsible": 1,
+   "icon": "globe",
+   "indent": 1,
+   "keep_closed": 0,
+   "label": "Sites",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Section Break"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "globe",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Site",
+   "link_to": "Site",
+   "link_type": "DocType",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "inbox",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Site Request",
+   "link_to": "Site Request",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
@@ -304,7 +351,7 @@
   }
  ],
  "module": "Atlas",
- "modified": "2026-06-08 00:00:00.000000",
+ "modified": "2026-06-11 00:00:00.000000",
  "modified_by": "Administrator",
  "name": "Atlas",
  "owner": "Administrator",
