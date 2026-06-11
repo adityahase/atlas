@@ -19,7 +19,11 @@ else.
 │   │   │       ├── rootfs.ext4        # block-special node → the VM's disk LV (mknod'd in, per-VM uid)
 │   │   │       ├── data.ext4          # block-special node → the VM's data disk LV (only if it has one)
 │   │   │       ├── vmlinux            # hard-link to the image kernel
-│   │   │       └── run/firecracker.socket  # Firecracker API socket
+│   │   │       ├── run/firecracker.socket  # Firecracker API socket
+│   │   │       └── snapshot/          # pending memory snapshot (fast stop/start), absent after a cold stop
+│   │   │           ├── vmstate.bin    # Firecracker vmstate, written by /snapshot/create
+│   │   │           ├── mem.bin        # guest RAM (RAM-sized file)
+│   │   │           └── READY          # marker: the pair is complete; consumed by vm-restore.py
 │   │   ├── network.env               # TAP/IPV6 + IPV4_HOST/GUEST_CIDR + netns + veth names
 │   │   ├── jailer-launch.sh          # generated launcher the unit execs (uid/gid, netns, cgroup/rlimit baked in)
 │   │   └── log/
@@ -38,6 +42,7 @@ else.
     ├── vm-network-up.py              # ExecStartPre: build the VM's netns + tap + veth
     ├── vm-network-down.py            # ExecStopPost: tear the same down
     ├── vm-disk-up.py                 # ExecStartPre: re-activate the VM's disk LV + refresh its jail node
+    ├── vm-restore.py                 # ExecStartPost: resume a pending memory snapshot (no-op on cold boot)
     └── atlas/                        # the durable stdlib-only package the hooks + atlas-pool.service import
         ├── lvm.py                    # ThinPool/LogicalVolume (successor to lvm.sh)
         ├── network_env.py            # read network.env, find default route device
@@ -47,11 +52,11 @@ else.
         └── _task.py                  # TaskInputs/TaskResult (typed CLI + ATLAS_RESULT= line)
 ```
 
-The systemd hooks (`vm-network-up.py`, `vm-network-down.py`, `vm-disk-up.py`)
-take a positional VM uuid (the unit passes `%i`) and add their own directory to
-`sys.path` so `import atlas` resolves the package next to them. They are NOT
-Tasks — they are excluded from the script catalog so the runner never executes
-them as one.
+The systemd hooks (`vm-network-up.py`, `vm-network-down.py`, `vm-disk-up.py`,
+`vm-restore.py`) take a positional VM uuid (the unit passes `%i`) and add their
+own directory to `sys.path` so `import atlas` resolves the package next to
+them. They are NOT Tasks — they are excluded from the script catalog so the
+runner never executes them as one.
 
 The VM disks themselves are **LVM thin volumes**, not files in this tree —
 they live in the `atlas` volume group on the thin pool `pool0`, reachable at

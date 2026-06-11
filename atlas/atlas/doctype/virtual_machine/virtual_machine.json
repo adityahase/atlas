@@ -33,6 +33,7 @@
   "column_break_security",
   "stop_protection",
   "termination_protection",
+  "memory_snapshot_on_stop",
   "section_break_networking",
   "ipv6_address",
   "public_ipv4",
@@ -46,7 +47,8 @@
   "section_break_activity",
   "last_started",
   "column_break_activity",
-  "last_stopped"
+  "last_stopped",
+  "has_memory_snapshot"
  ],
  "fields": [
   {
@@ -237,6 +239,13 @@
    "label": "Termination Protection"
   },
   {
+   "default": "0",
+   "description": "Opt in: capture the VM's full memory state on stop() so the next Start resumes it in milliseconds instead of cold-booting. Restart then power-cycles back to the saved state rather than rebooting the guest. Off by default — the plain stop and cold boot remain the default path.",
+   "fieldname": "memory_snapshot_on_stop",
+   "fieldtype": "Check",
+   "label": "Memory Snapshot on Stop"
+  },
+  {
    "collapsible": 1,
    "fieldname": "section_break_networking",
    "fieldtype": "Section Break",
@@ -317,6 +326,14 @@
    "fieldname": "last_stopped",
    "fieldtype": "Datetime",
    "label": "Last Stopped",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "The last stop captured a complete memory snapshot; the next Start resumes from it. Cleared when the snapshot is consumed or invalidated (start, rebuild, resize, host-key rotation).",
+   "fieldname": "has_memory_snapshot",
+   "fieldtype": "Check",
+   "label": "Has Memory Snapshot",
    "read_only": 1
   }
  ],

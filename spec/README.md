@@ -41,10 +41,14 @@ keep it the source of truth.
   AppArmor profile, CPU *pinning* (we cap CPU bandwidth, not affinity), a new
   PID namespace per VM, custom seccomp filters.
 - No image build pipeline. We download Ubuntu cloud images and use them.
-- No Firecracker memory-state snapshots, no live migration, no high
-  availability. (Disk snapshots — instant copy-on-write LVM thin snapshots of
-  the VM's disk — are supported; see
-  [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md).)
+- No live migration, no high availability. Firecracker memory-state
+  snapshots exist for exactly one internal purpose — the opt-in fast
+  stop/start path on the same host (an opted-in stop captures RAM, the next
+  start resumes it in milliseconds; see
+  [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md)) —
+  and are never operator-facing artifacts or transportable between hosts.
+  (Disk snapshots — instant copy-on-write LVM thin snapshots of the VM's
+  disk — are supported; same doc.)
 - No autoscaling or scheduling. The operator picks the server in Desk; a user
   creating a machine in the SPA gets the first Active server with room (a
   default, not a scheduler — see [11-user-ui.md](./11-user-ui.md)). "Room" is

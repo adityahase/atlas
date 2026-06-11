@@ -82,6 +82,35 @@ class VirtualMachinePaths:
 		return f"{self.directory}/jailer-launch.sh"
 
 	@property
+	def memory_snapshot_directory(self) -> str:
+		"""Where a full memory-state snapshot (vmstate + guest RAM) lands, inside
+		the jail so the jailed Firecracker can write it and terminate's rm -rf
+		sweeps it. Written by snapshot-stop-vm.py, consumed by vm-restore.py."""
+		return f"{self.jail_root}/snapshot"
+
+	@property
+	def memory_snapshot_marker(self) -> str:
+		"""Present iff the snapshot pair below is COMPLETE and matches the disk —
+		written last on stop, consumed (removed) before resume on restore. The
+		launcher keys off it: marker present → start Firecracker idle (no
+		--config-file) for vm-restore.py to load into; absent → normal cold boot."""
+		return f"{self.memory_snapshot_directory}/READY"
+
+	@property
+	def memory_snapshot_vmstate(self) -> str:
+		return f"{self.memory_snapshot_directory}/vmstate.bin"
+
+	@property
+	def memory_snapshot_mem(self) -> str:
+		return f"{self.memory_snapshot_directory}/mem.bin"
+
+	# Jail-relative forms for the Firecracker API bodies — the jailed process
+	# resolves snapshot paths after chroot, so they are relative to jail_root
+	# (same convention as firecracker.json's rootfs.ext4 / vmlinux).
+	memory_snapshot_vmstate_in_jail: str = "snapshot/vmstate.bin"
+	memory_snapshot_mem_in_jail: str = "snapshot/mem.bin"
+
+	@property
 	def api_socket_directory(self) -> str:
 		"""Directory holding firecracker.socket. Callers `cd` here (as root —
 		it is 0700-owned by the per-VM uid) and address the socket by its short

@@ -16,8 +16,10 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
+from atlas._run import run
 from atlas._task import TaskInputs
 from atlas.lvm import ThinPool
+from atlas.paths import VirtualMachinePaths
 from atlas.rootfs import regenerate_host_keys_on_device
 
 
@@ -36,6 +38,10 @@ def main() -> None:
 
 	if not disk.exists:
 		sys.exit(f"disk LV {disk.name} missing; provision the VM first")
+
+	# The rootfs is about to change under any pending memory snapshot; saved RAM
+	# referencing the old disk must never be restored over the new one.
+	run("sudo", "rm", "-rf", VirtualMachinePaths(inputs.virtual_machine_name).memory_snapshot_directory)
 
 	# Activate (idempotent) before mounting — a Stopped VM's thin snapshot LV may
 	# be deactivated. The key comment mirrors the per-VM hostname (atlas-<uuid8>),

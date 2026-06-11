@@ -1,13 +1,20 @@
 """Use case: operate a running Firecracker VM.
 
-Operator clicks Start / Stop / Restart / Terminate. Each is one Task running
-a one-line shell script (`start-vm.py`, `stop-vm.py`, `terminate-vm.py`);
-Restart is `stop` + `start` orchestrated in Python, not a separate script.
+Operator clicks Start / Stop / Restart / Terminate. Each is one Task
+(`start-vm.py`, `snapshot-stop-vm.py` — the default memory-capturing stop —
+`stop-vm.py`, `terminate-vm.py`); Restart is `stop` + `start` orchestrated in
+Python, not a separate script.
 
 This module exercises:
 
 - Auto-provision (insert -> Running) -> Stop -> Start -> Restart ->
   Terminate, with a probe on every state.
+- The memory-snapshot fast path on the way: the VM is OPTED IN
+  (memory_snapshot_on_stop — the plain stop stays the default), so the stop
+  captures the guest's memory (`has_memory_snapshot`) and the next start
+  RESUMES it instead of cold-booting (the start Task reports "restored from
+  memory snapshot") — the host fact only a real Firecracker round trip can
+  prove.
 - Terminate again from Terminated throws.
 
 (Phase 4 dropped the Pending state guards from this use case — auto-provision
@@ -72,21 +79,33 @@ def _check_full_lifecycle(server_name: str, vm) -> None:
 	first_started = vm.last_started
 	assert_probe(server_name, "phase5-is-active.sh", VIRTUAL_MACHINE_NAME=vm.name)
 
-	# Stop.
+	# Stop, opted into the memory-snapshot fast path (the plain stop is the
+	# default; this VM opts in to prove the capture/restore round trip). A
+	# freshly-provisioned VM's launcher supports the restore, so the fast path
+	# must actually engage — a silent fallback to the plain stop would pass
+	# every other assert and hide a broken snapshot path.
+	vm.db_set("memory_snapshot_on_stop", 1)
+	vm.reload()
 	vm.stop()
 	vm.reload()
 	assert vm.status == "Stopped", vm.status
 	assert vm.last_stopped, "last_stopped should be set"
+	assert vm.has_memory_snapshot, "default stop should have captured a memory snapshot"
 	assert_probe(server_name, "phase6-is-inactive.sh", VIRTUAL_MACHINE_NAME=vm.name)
 
-	# Start.
+	# Start — must RESUME from the memory snapshot, not cold-boot. The start
+	# Task says which way it went; the flag is consumed either way.
 	time.sleep(1)  # advance clock for last_started comparison
-	vm.start()
+	start_task = frappe.get_doc("Task", vm.start())
 	vm.reload()
 	assert vm.status == "Running", vm.status
 	assert vm.last_started > first_started, (
 		f"last_started did not advance: {first_started} -> {vm.last_started}"
 	)
+	assert "restored from memory snapshot" in (start_task.stdout or ""), (
+		f"start did not restore the memory snapshot:\n{start_task.stdout}"
+	)
+	assert not vm.has_memory_snapshot, "the start should have consumed the snapshot"
 	assert_probe(server_name, "phase5-is-active.sh", VIRTUAL_MACHINE_NAME=vm.name)
 
 	# Restart (Running -> Running, two tasks).

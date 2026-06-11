@@ -52,6 +52,11 @@ def main() -> None:
 	if not disk.exists:
 		sys.exit(f"disk LV {disk.name} missing; provision the VM first")
 
+	# The machine config (and possibly the disk) is about to change under any
+	# pending memory snapshot; the saved vmstate would no longer match. Drop it
+	# so the next Start cold-boots with the new config.
+	run("sudo", "rm", "-rf", paths.memory_snapshot_directory)
+
 	# 1. Rewrite machine-config in place. jq edits only the two keys, preserving
 	#    boot-source, drives and network-interfaces. The replacement file is created
 	#    by root; copy the original's owner onto it so the jailed Firecracker (the

@@ -218,6 +218,33 @@ class TestSidecarUploads(IntegrationTestCase):
 		)
 		self.assertLess(sidecar_index, script_index)
 
+	def test_staging_purges_the_legacy_staged_package(self) -> None:
+		# Hosts bootstrapped before the durable-package cutover still carry a
+		# per-Task staged lib at /tmp/atlas/lib; the entry points' sys.path
+		# shim puts it AHEAD of PYTHONPATH, so a stale copy there shadows every
+		# durable-package update (the bug: provision-vm.py failing with
+		# "'VirtualMachinePaths' object has no attribute ..." after a
+		# bootstrap had already refreshed /var/lib/atlas/bin). The staging
+		# preamble must remove it before every Task.
+		ssh_commands: list[str] = []
+
+		def capture(args, **kwargs):
+			if args[0] == "ssh":
+				ssh_commands.append(args[-1])
+			return _ok(args, **kwargs)
+
+		with patch("atlas.atlas._ssh.transport.subprocess.run", side_effect=capture):
+			run_task(
+				connection=CONNECTION,
+				script="snapshot-vm.py",
+				variables={"VIRTUAL_MACHINE_NAME": "x", "SNAPSHOT_ROOTFS_PATH": "/dev/atlas/y"},
+			)
+
+		staging = next(command for command in ssh_commands if "mkdir -p" in command)
+		self.assertIn(f"rm -rf {runner.STALE_STAGED_PACKAGE_DIRECTORY}", staging)
+		# The purge must come before the mkdir that re-creates the staging dir.
+		self.assertLess(staging.index("rm -rf"), staging.index("mkdir -p"))
+
 
 class TestRemoteCommand(IntegrationTestCase):
 	"""The .py vs .sh dispatch in runner._remote_command — the heart of the

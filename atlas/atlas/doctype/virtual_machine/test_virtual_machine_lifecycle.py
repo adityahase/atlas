@@ -53,6 +53,8 @@ class TestVirtualMachineLifecycle(IntegrationTestCase):
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
 		vm = _vm_with_status("Running")
+		# stop() defaults to the plain unit stop; the memory-snapshot fast path
+		# is opt-in via memory_snapshot_on_stop (covered in test_virtual_machine).
 		task = fake_task(name="task-stop-1")
 		with patch.object(module, "run_task", return_value=task) as mocked:
 			result = vm.stop()
@@ -60,6 +62,7 @@ class TestVirtualMachineLifecycle(IntegrationTestCase):
 		vm.reload()
 		self.assertEqual(vm.status, "Stopped")
 		self.assertIsNotNone(vm.last_stopped)
+		self.assertFalse(vm.has_memory_snapshot)
 		mocked.assert_called_once()
 		self.assertEqual(mocked.call_args.kwargs["script"], "stop-vm.py")
 

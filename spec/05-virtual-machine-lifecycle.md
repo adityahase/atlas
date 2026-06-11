@@ -7,13 +7,17 @@ idempotent shell script.
 
 Two design rules keep this set small and safe:
 
-- **Snapshots are disk-only.** A snapshot is an LVM thin CoW snapshot of the
-  VM's disk LV — not a Firecracker memory-state snapshot. We never call
-  Firecracker's `/snapshot/create` or `/snapshot/load`. This dodges the
-  pre-boot-only load path (which can't coexist with our `--config-file`
-  boot), the RAM-sized memory file, and the duplicate-identity hazard the
-  [Firecracker docs](../../references/firecracker/docs/snapshotting/snapshot-support.md)
-  call insecure. The boot path and the systemd unit are unchanged.
+- **Operator snapshots are disk-only.** A `Virtual Machine Snapshot` is an LVM
+  thin CoW snapshot of the VM's disk LV — never a Firecracker memory-state
+  artifact, so it dodges the RAM-sized file and the duplicate-identity hazard
+  the [Firecracker docs](../../references/firecracker/docs/snapshotting/snapshot-support.md)
+  call insecure (one snapshot resumed twice is two guests with one identity).
+  Firecracker's `/snapshot/create` + `/snapshot/load` **are** used — but only
+  by the internal [fast stop/start path](#memory-snapshots-fast-stop--start):
+  one ephemeral, host-local memory snapshot per VM, written at stop and
+  consumed by the next start, never an operator-facing object and never
+  restored twice. The pre-boot-only load path (which can't coexist with our
+  `--config-file` boot) is handled by the launcher's marker conditional.
 - **Disk operations default to Stopped.** A CoW snapshot of (or a replacement
   under) an ext4 the guest still has mounted is *crash-consistent* — atomic at
   the block layer, but missing unflushed guest-cache writes and dependent on
@@ -25,9 +29,11 @@ Two design rules keep this set small and safe:
   surfaces the Stopped-only actions while Stopped and **Snapshot (live)** while
   Running/Paused; the controllers enforce the rules.
 
-The only operation that touches Firecracker's API socket is **pause/resume**
+Two operations touch Firecracker's API socket: **pause/resume**
 (`PATCH /vm {Paused|Resumed}`) — a runtime vCPU freeze that keeps RAM
-resident, distinct from Stop.
+resident, distinct from Stop — and the **memory-snapshot fast stop/start**
+(`PUT /snapshot/create` at stop, `PUT /snapshot/load` at start; see
+[Memory snapshots](#memory-snapshots-fast-stop--start)).
 
 ## Identity
 
@@ -217,19 +223,97 @@ The data disk's whole lifecycle lives in the same scripts as the root disk
 
 ## Start / Stop / Restart
 
-Each is a single Task running a one-line script:
+Each is a single Task:
 
-- `start-vm.py`: `systemctl start firecracker-vm@<name>.service`
-- `stop-vm.py`: `systemctl stop firecracker-vm@<name>.service`
+- `start-vm.py`: `systemctl start firecracker-vm@<name>.service` (the host
+  decides cold boot vs. memory restore on its own — see
+  [Memory snapshots](#memory-snapshots-fast-stop--start)), plus a one-shot
+  cold retry when a restore attempt failed mid-start.
+- `stop-vm.py` (the default): `systemctl stop firecracker-vm@<name>.service`
+- `snapshot-stop-vm.py` (opt-in: the VM's `memory_snapshot_on_stop` is
+  checked, or the caller passed `stop(memory_snapshot=True)`):
+  pause → `PUT /snapshot/create` → marker → `systemctl stop`; any snapshot
+  failure falls back to the plain stop inside the same Task.
 - `terminate-vm.py`: see below
 
-Restart is `stop-vm.py` then `start-vm.py`, but as the Python method's
-choice — we do not add a `restart-vm.py`, because the only thing `systemctl
-restart` adds is one fewer network round-trip and we already paid for both.
+Restart is stop then start, as the Python method's choice — we do not add a
+`restart-vm.py`, because the only thing `systemctl restart` adds is one fewer
+network round-trip and we already paid for both. **On a VM opted into memory
+snapshots, a restart is a state-preserving power cycle, not a guest reboot** —
+the stop saves the guest's RAM and the start resumes it, so a wedged guest
+stays wedged. `restart(cold=True)` is the true-reboot escape hatch (plain
+stop, full cold boot); a VM that never opted in restarts cold as it always
+did.
 
 Status updates happen after the Task succeeds. We do not poll the server
 to verify; the source of truth is the Task. If the operator wants ground
 truth, they click `Run Task` with `script=systemctl status ...`.
+
+## Memory snapshots: fast stop / start
+
+A cold boot takes 60–120s to a usable guest; loading a saved memory state
+takes milliseconds. So an **opted-in** `stop()` captures the VM's **full
+memory state** (vmstate + guest RAM, Firecracker's `/snapshot/create`) before
+shutting the unit down, and the next `start()` resumes the guest exactly
+where it paused instead of booting it. Per-VM `memory_snapshot_on_stop`
+(default **off** — the plain stop and cold boot remain the default path)
+selects the fast stop, as does a one-off `stop(memory_snapshot=True)`;
+`has_memory_snapshot` (read-only) records whether the last stop actually
+captured one.
+
+**The fast path runs only when the last working state was fully snapshotted;
+everything else takes the default path.** Concretely, the contract is one
+marker file:
+
+- The snapshot pair lives inside the jail at `snapshot/{vmstate.bin,mem.bin}`
+  with a `snapshot/READY` marker written **last**, only after Firecracker
+  reports the pair complete. No marker — for any reason — means the next start
+  is a plain cold boot.
+- `snapshot-stop-vm.py` pre-flights (launcher generation, API socket, free
+  space for a RAM-sized file) and **falls back to the plain stop inside the
+  same Task** on any failure, emitting `memory_snapshot=false` plus the
+  reason. The VM always ends up Stopped; only the next start's speed differs.
+- At start, the per-VM launcher checks the marker: present → Firecracker
+  starts **idle** (no `--config-file`; `/snapshot/load` is pre-boot only and
+  cannot coexist with it); absent → the normal `--config-file` cold boot. The
+  unit's `ExecStartPost` hook (`vm-restore.py`) then loads the snapshot,
+  **consumes the marker before resuming the guest**, and resumes. Once the
+  guest runs it writes to its disk, so the saved RAM no longer matches the
+  disk — consuming the marker first guarantees the same snapshot is never
+  restored twice (the duplicate/stale-identity hazard).
+- A failed restore self-heals: `vm-restore.py` removes the marker and exits
+  non-zero; the unit fails, `Restart=always` relaunches it, and the
+  marker-less launcher cold-boots. `start-vm.py` recognizes that exact
+  signature (marker present before, gone after, start failed) and retries the
+  start synchronously so the Task ends green and the row stays truthful.
+
+**Invalidation.** Saved RAM is only restorable against the exact disk and
+machine config it was paused over, so every mutation of either removes the
+on-host snapshot directory and clears `has_memory_snapshot`: rebuild/restore
+(`rebuild-vm.py`), resize (`resize-vm.py`), host-key rotation
+(`regenerate-host-keys-vm.py`), and re-provision (`provision-vm.py`).
+Terminate's `rm -rf` of the VM directory sweeps it with the jail. A disk
+snapshot of a Stopped VM mutates nothing and leaves it valid.
+
+**Semantics and limits, deliberately accepted:**
+
+- A restored guest never observes a reboot, and its clock is stale by the
+  stopped interval until NTP (`systemd-timesyncd` in the Ubuntu images)
+  corrects it. Long-stopped VMs may see TLS/cert and TCP oddities until then.
+- The memory file is RAM-sized on the host filesystem (not the thin pool) for
+  the duration of the stop; the pre-flight refuses the fast path when space
+  is short.
+- The snapshot is **host-local ephemeral state, a cache** — it is never
+  synced to Frappe, never survives terminate, and losing it costs only a
+  cold boot. The Frappe DB stays the source of truth for everything durable
+  (spec principle 2); `has_memory_snapshot` is bookkeeping, not authority:
+  the host marker decides at start time.
+- A snapshot written by one Firecracker binary may be refused by another
+  (host upgraded between stop and start). That surfaces as a failed load and
+  takes the self-healing cold-boot path above — no version bookkeeping needed.
+- Launchers generated before this feature always pass `--config-file`, so
+  `snapshot-stop-vm.py` detects them and falls back; re-provisioning
+  regenerates the launcher and enables the fast path.
 
 ## Stop / Terminate protection
 
@@ -527,14 +611,22 @@ canonical artifact. Highlights:
   (and the stale API socket) first. Without this, the first Stop→Start cycle
   fails ("Failed to create /dev/net/tun via mknod: File exists"). The rootfs,
   kernel and config alongside `dev/` are left untouched.
+- `ExecStartPost=/usr/bin/python3 /var/lib/atlas/bin/vm-restore.py %i` — the
+  memory-snapshot restore hook. No marker → exit 0 (the common cold boot).
+  Marker → load the snapshot over the API socket, consume the marker, resume.
+  See [Memory snapshots](#memory-snapshots-fast-stop--start). The pre-start
+  jail cleanup above deliberately does NOT touch `snapshot/`.
 - `KillMode=mixed` — the jailer is the unit's main process and Firecracker is
   its child; mixed sends SIGTERM to the jailer and SIGKILL to the whole cgroup,
   so the jailed Firecracker dies with the unit rather than being orphaned.
-- `--config-file` is used, not the API socket, during boot. Fewer moving
-  parts. The API socket is still created (`--api-sock`) inside the jail and used
-  after boot by `pause-vm.py` / `resume-vm.py`. Snapshot/restore/rebuild/resize
-  do **not** touch the socket — they are disk and config operations on a
-  Stopped VM.
+- `--config-file` is used, not the API socket, during a cold boot. Fewer
+  moving parts. The API socket is still created (`--api-sock`) inside the jail
+  and used after boot by `pause-vm.py` / `resume-vm.py`, and at stop/start by
+  the memory-snapshot path (`snapshot-stop-vm.py` / `vm-restore.py`). When a
+  memory snapshot is pending, the launcher omits `--config-file` so Firecracker
+  starts idle for the pre-boot-only `/snapshot/load`. Disk
+  snapshot/restore/rebuild/resize do **not** touch the socket — they are disk
+  and config operations on a Stopped VM.
 
 ## Host reboot recovery
 
@@ -549,6 +641,13 @@ disk; the unit then re-execs the per-VM `jailer-launch.sh`, which has the per-VM
 uid/caps/netns baked in. All artifacts were written at provision time and
 survive the reboot on disk. No Atlas-side intervention needed; the Frappe DB
 does not have to be consulted on host reboot.
+
+A pending memory snapshot survives the reboot too (it is plain files in the
+jail), so a VM that was fast-stopped before the host went down comes back by
+**resuming its saved state** rather than cold-booting — the launcher and
+`vm-restore.py` key off the marker exactly as on an ordinary start. A VM that
+was *Running* at reboot lost its RAM with the host; it has no marker and
+cold-boots as before.
 
 ## Why resource fields are frozen outside resize
 

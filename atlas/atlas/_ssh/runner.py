@@ -26,6 +26,12 @@ if TYPE_CHECKING:
 # the package's PARENT so `import atlas` resolves the `atlas/` directory under it.
 DURABLE_PACKAGE_DIRECTORY = "/var/lib/atlas/bin"
 
+# Where the pre-cutover runner staged the package per Task. The entry points'
+# `sys.path.insert(0, <staging>/lib)` shim puts this AHEAD of PYTHONPATH, so a
+# leftover copy on a legacy host shadows the durable package with stale modules.
+# _run_remote_script purges it before every Task.
+STALE_STAGED_PACKAGE_DIRECTORY = f"{REMOTE_STAGING_DIRECTORY}/lib"
+
 
 def run_task(
 	*,
@@ -192,11 +198,19 @@ def _run_remote_script(
 
 	with ssh_key_file(connection.ssh_private_key) as key_path:
 		# Create the staging dir and every remote parent directory the uploads
-		# need (the `atlas` package lands under /tmp/atlas/lib/atlas/, which scp
-		# will not create on its own) in one round trip.
+		# need in one round trip. The purge first: hosts bootstrapped before the
+		# durable-package cutover still carry a per-Task staged copy of the lib
+		# at <staging>/lib, and the entry points' `sys.path.insert(0, <staging>/lib)`
+		# shim puts it AHEAD of PYTHONPATH — so a stale copy there shadows every
+		# durable-package update (e.g. an old paths.py without the new attributes).
+		# Removing it makes the shim the no-op the durable contract assumes.
 		remote_dirs = {REMOTE_STAGING_DIRECTORY}
 		remote_dirs.update(os.path.dirname(remote) for _, remote in uploads)
-		mkdir = "mkdir -p " + " ".join(shlex.quote(d) for d in sorted(remote_dirs) if d)
+		mkdir = (
+			f"rm -rf {shlex.quote(STALE_STAGED_PACKAGE_DIRECTORY)} && "
+			+ "mkdir -p "
+			+ " ".join(shlex.quote(d) for d in sorted(remote_dirs) if d)
+		)
 		run_ssh(connection, key_path, mkdir, timeout_seconds=60)
 
 		for local, remote in uploads:
@@ -226,8 +240,10 @@ def _remote_command(script: str, remote_script_path: str, variables: dict) -> st
 	Python tasks `import atlas` from the DURABLE package bootstrap placed at
 	`/var/lib/atlas/bin/atlas/`, reached via `PYTHONPATH` here — the package is no
 	longer re-staged per Task (see script_uploads.py). The entry point's own
-	`sys.path.insert(<staging>/lib)` shim is now a harmless no-op (that dir is not
-	populated); PYTHONPATH wins because it is on sys.path ahead of it.
+	`sys.path.insert(0, <staging>/lib)` shim sits AHEAD of PYTHONPATH, which is
+	harmless only because `_run_remote_script` purges <staging>/lib before every
+	Task — a legacy host's leftover staged copy would otherwise shadow the
+	durable package with stale modules.
 	"""
 	quoted_path = shlex.quote(remote_script_path)
 	if script.endswith(".py"):

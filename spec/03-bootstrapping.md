@@ -165,14 +165,16 @@ uploads (see `_BOOTSTRAP_UPLOADS` + `_bootstrap_uploads()` in `server.py`):
 - `scripts/vm-network-up.py` → `/var/lib/atlas/bin/vm-network-up.py`
 - `scripts/vm-network-down.py` → `/var/lib/atlas/bin/vm-network-down.py`
 - `scripts/vm-disk-up.py` → `/var/lib/atlas/bin/vm-disk-up.py`
+- `scripts/vm-restore.py` → `/var/lib/atlas/bin/vm-restore.py`
 - `scripts/systemd/firecracker-vm@.service` → `/etc/systemd/system/firecracker-vm@.service`
 - `scripts/systemd/atlas-pool.service` → `/etc/systemd/system/atlas-pool.service`
 - every `scripts/lib/atlas/*.py` (test files skipped) → `/var/lib/atlas/bin/atlas/*.py`
 
-The systemd hooks (`vm-network-up.py`, `vm-network-down.py`, `vm-disk-up.py`)
-are invoked by the unit as `python3 <path> %i` (a positional VM uuid, not Task
-`--flags`) and `import` the durable package next to them; the package
-(`/var/lib/atlas/bin/atlas/`) replaces the old durable `lvm.sh` shell library.
+The systemd hooks (`vm-network-up.py`, `vm-network-down.py`, `vm-disk-up.py`,
+`vm-restore.py`) are invoked by the unit as `python3 <path> %i` (a positional
+VM uuid, not Task `--flags`) and `import` the durable package next to them; the
+package (`/var/lib/atlas/bin/atlas/`) replaces the old durable `lvm.sh` shell
+library.
 
 The `Server.bootstrap()` Python method orchestrates this:
 

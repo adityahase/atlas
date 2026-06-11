@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 
+from atlas._run import run
 from atlas._task import TaskInputs
 from atlas.lvm import ThinPool
 from atlas.paths import VirtualMachinePaths
@@ -89,6 +90,10 @@ def main() -> None:
 			sys.exit(f"base image LV not present: {origin.name}; run Sync to Server first")
 
 	disk = pool.vm_disk(inputs.virtual_machine_name)
+
+	# The disk is about to change under any pending memory snapshot; saved RAM
+	# referencing the old disk must never be restored over the new one.
+	run("sudo", "rm", "-rf", paths.memory_snapshot_directory)
 
 	# Replace the existing disk: drop the old VM LV, then recreate it as a fresh
 	# CoW snapshot of the origin. prepare_lv no-ops when the LV exists, so the

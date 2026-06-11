@@ -278,11 +278,12 @@ with no host. A Task script imports it from **one durable copy** on the host:
 
 ### Systemd hooks are Python too, but not Tasks
 
-`vm-disk-up.py`, `vm-network-up.py`, `vm-network-down.py` run from the VM
-unit's `ExecStartPre`/`ExecStopPost`, not over SSH. They take a **positional
-uuid** (`%i`), not `--flags`, and import the durable package. They are
-excluded from `scripts_catalog.allowed_scripts()` (`SYSTEMD_HOOKS`) so the
-Task runner never executes them. `atlas-pool.service` runs the pool bring-up
+`vm-disk-up.py`, `vm-network-up.py`, `vm-network-down.py`, `vm-restore.py`
+run from the VM unit's `ExecStartPre`/`ExecStartPost`/`ExecStopPost`, not over
+SSH. They take a **positional uuid** (`%i`), not `--flags`, and import the
+durable package. They are excluded from
+`scripts_catalog.allowed_scripts()` (`SYSTEMD_HOOKS`) so the Task runner
+never executes them. `atlas-pool.service` runs the pool bring-up
 inline: `python3 -c "… ThinPool().ensure()"`. There is no shell helper
 library (`lvm.sh`) anymore — the durable `atlas` package replaced it.
 
@@ -319,6 +320,7 @@ isn't blocked in Desk.
 | `sync-image.py`       | Queued (`execute_task`)  | Minutes; downloads ~600MB.                                          |
 | `provision-vm.py`     | Sync                     | ~3s; operator waits.                                                |
 | `start-vm.py` / `stop-vm.py` / `terminate-vm.py` | Sync | <1s.                                                  |
+| `snapshot-stop-vm.py`  | Sync                    | The opt-in memory-capturing stop; pause + RAM dump + stop. Seconds, bounded by RAM size / disk write speed. |
 | `vm-reserved-ip.py`   | Sync (via `Reserved IP.attach()`/`detach()`) | <1s; applies/removes the inbound-v4 1:1-NAT live. |
 | `reboot-server.sh`    | Sync (via `run_task_dialog`) | The SSH drops mid-Task; the operator confirms by reconnecting. |
 | Ad-hoc via Run Task   | Sync                     | The dialog is the operator's "I want to see this finish" path.      |
@@ -407,8 +409,8 @@ The list of scripts an operator can run lives in
   runner and the `Server.run_task_dialog` controller method.
   `scripts/guest/` and `scripts/systemd/` are excluded (not host-runnable),
   and so are the systemd-hook scripts (`SYSTEMD_HOOKS`: `vm-disk-up.py`,
-  `vm-network-up.py`, `vm-network-down.py`) — they run from the VM unit with a
-  positional uuid, not as Tasks.
+  `vm-network-up.py`, `vm-network-down.py`, `vm-restore.py`) — they run from
+  the VM unit with a positional uuid, not as Tasks.
 - `operator_visible_scripts()` is the strict subset the desk's `Run Task`
   picker is allowed to expose: `bootstrap-server.py`,
   `reboot-server.sh`, `sync-image.py`. Everything else
@@ -486,7 +488,8 @@ Failed Tasks expose a **Retry** button on the form. `Task.retry()` is a
 whitelisted method that:
 
 - For VM lifecycle scripts (`provision-vm.py`, `start-vm.py`,
-  `stop-vm.py`, `restart-vm.py`, `terminate-vm.py`): loads the linked
+  `stop-vm.py`, `snapshot-stop-vm.py`, `restart-vm.py`,
+  `terminate-vm.py`): loads the linked
   Virtual Machine and calls the matching controller method
   (`vm.provision()`, `vm.start()`, …). The state-machine guards on the
   VM live there; Retry does not duplicate them. If the VM is in a

@@ -434,6 +434,8 @@ deletion.
 | `ssh_public_key`   | Long Text                     | Y    |           |         | `set_only_once`. Injected into the rootfs.                       |
 | `stop_protection`  | Check                         |      |           | 0       | When set, `stop()` refuses to stop the VM (and therefore `restart()`, which stops first). Off by default. The operator unchecks and saves before stopping — a deliberate two-step guard, the same shape as the immutability throws. Independent of `termination_protection`. |
 | `termination_protection` | Check                   |      |           | 0       | When set, `terminate()` refuses to terminate the VM. Off by default. Unchecked + saved before terminate. Independent of `stop_protection` (terminate does not go through `stop()`). |
+| `memory_snapshot_on_stop` | Check                  |      |           | 0       | Opt in: `stop()` captures the VM's full memory state so the next Start resumes in milliseconds instead of cold-booting. **Restart then power-cycles back to the saved state rather than rebooting the guest** (`restart(cold=True)` for a true reboot). Off by default — the plain stop and cold boot remain the default path. Falls back to the plain stop on any snapshot failure. See [05 § Memory snapshots](./05-virtual-machine-lifecycle.md#memory-snapshots-fast-stop--start). |
+| `has_memory_snapshot` | Check                      |      | Y         | 0       | The last stop captured a complete memory snapshot; the next Start resumes from it. Bookkeeping, not authority — the on-host `READY` marker decides at start time. Cleared when the snapshot is consumed (start) or invalidated (rebuild, resize, host-key rotation). |
 | `clone_source_rootfs` | Data                       |      | Y         |         | Internal, hidden. On-host snapshot rootfs to seed this VM's disk from (clone). Empty for a normal image-backed VM. `set_only_once`, `no_copy`. |
 | `clone_source_data_rootfs` | Data                  |      | Y         |         | Internal, hidden. On-host data-disk snapshot to seed this VM's data disk from (clone). Empty for a normal VM. `set_only_once`, `no_copy`. |
 | `ipv6_address`     | Data                          |      | Y         |         | From the server's /124. Set in `before_insert`.                  |
@@ -491,6 +493,7 @@ data_disk_mount_point
 ssh_public_key
 | stop_protection
   termination_protection
+  memory_snapshot_on_stop
 ── Networking ── (collapsible)
 ipv6_address
 public_ipv4
@@ -502,6 +505,7 @@ is_proxy
 ── Activity ── (collapsible)
 last_started
 | last_stopped
+  has_memory_snapshot
 ```
 
 ### List view
@@ -521,9 +525,18 @@ Tiering is keyed off `status` — see [10-desk-ui.md § Virtual Machine](./10-de
 - **Start** (primary on `Stopped`) — `Stopped` → `Running`.
 - **Stop** (primary on `Running`) — `Running` → `Stopped`. Also offered
   (secondary) on `Paused`. Refused while `stop_protection` is set (the
-  controller throws; the operator unchecks + saves first).
+  controller throws; the operator unchecks + saves first). On a VM opted into
+  `memory_snapshot_on_stop` it runs the memory-capturing
+  `snapshot-stop-vm.py`; the default is the plain `stop-vm.py`. See
+  [05 § Memory snapshots](./05-virtual-machine-lifecycle.md#memory-snapshots-fast-stop--start).
+- **Stop (memory snapshot)** (under `Actions ▾` on `Running` / `Paused`) —
+  the one-off fast stop: calls `stop` with `{memory_snapshot: true}` without
+  touching the per-VM flag. The next Start resumes the captured state in
+  milliseconds.
 - **Resume** (primary on `Paused`) — `Paused` → `Running`.
-- **Restart** (secondary on `Stopped` / `Running`) → `Running`.
+- **Restart** (secondary on `Stopped` / `Running`) → `Running`. On an
+  opted-in VM this is a state-preserving power cycle, not a guest reboot;
+  `restart(cold=True)` is the true-reboot path.
 - **Pause** (secondary on `Running`) — `Running` → `Paused` via the API
   socket. Runs [`scripts/pause-vm.py`](../scripts/pause-vm.py).
 - **Snapshot / Rebuild / Resize** (secondaries on `Stopped`, each opens a

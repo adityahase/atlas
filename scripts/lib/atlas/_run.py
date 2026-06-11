@@ -106,8 +106,8 @@ def install_directory(dest: str, *, mode: str = "0700", sudo: bool = True) -> No
 	run(*argv)
 
 
-def firecracker_api_patch(socket_directory: str, socket_name: str, body: str) -> None:
-	"""PATCH the Firecracker /vm state over its jailed API socket.
+def firecracker_api(socket_directory: str, socket_name: str, method: str, api_path: str, body: str) -> None:
+	"""Call the Firecracker API over its jailed unix socket.
 
 	The absolute socket path exceeds AF_UNIX's 108-byte sun_path limit, so we
 	`cd` into the socket directory (as root via `sudo sh -c` — the dir is
@@ -118,8 +118,13 @@ def firecracker_api_patch(socket_directory: str, socket_name: str, body: str) ->
 		f"cd {shlex.quote(socket_directory)} && "
 		f"curl --fail --silent --show-error "
 		f"--unix-socket {shlex.quote(socket_name)} "
-		f"-X PATCH 'http://localhost/vm' "
+		f"-X {method} 'http://localhost{api_path}' "
 		f"-H 'Content-Type: application/json' "
 		f"-d {shlex.quote(body)}"
 	)
 	run("sudo", "sh", "-c", command)
+
+
+def firecracker_api_patch(socket_directory: str, socket_name: str, body: str) -> None:
+	"""PATCH the Firecracker /vm state (Paused/Resumed) — see firecracker_api."""
+	firecracker_api(socket_directory, socket_name, "PATCH", "/vm", body)
