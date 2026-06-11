@@ -519,6 +519,40 @@ the snapshot LV lives in the pool (outside the VM directory) and is not swept by
 terminate's `rm -rf`. See
 [02-doctypes.md § Virtual Machine Snapshot](./02-doctypes.md#virtual-machine-snapshot).
 
+### Capturing a warm snapshot from a live VM
+
+`Virtual Machine.capture_warm_snapshot(title=None)` is the per-VM operator
+action that produces a `kind=Warm` snapshot — the **capture half** of the Image
+Builder's warm bake ([15-image-builder.md](./15-image-builder.md)), exposed
+directly on a live VM. It runs
+[`warm-snapshot-vm.py`](../scripts/warm-snapshot-vm.py): pause the running
+guest's vCPUs, write the memory pair (`vmstate.bin` + `mem.bin`) **and** an LVM
+thin disk snapshot at the *same* paused instant into the durable per-snapshot
+directory `/var/lib/atlas/snapshots/<name>/` beside a `host-signature.json`,
+then resume. The VM never stops — the warmth ends up in the durable artifact,
+not in a stopped scratch VM. The row captures the machine config (`vcpus`,
+`memory_megabytes`) and `tap_device` the frozen vmstate pins, then is folded to
+`Available` with `size_bytes`, `memory_bytes`, and `host_signature` from the
+Task result — the same shape `image_build._warm_snapshot` records.
+
+- **Running or Paused only.** There has to be a live guest to freeze; a Stopped
+  VM has no memory to capture (take a plain `snapshot()` instead). The capture
+  script also refuses a VM with a **data disk** — warm snapshots are root-only.
+- **Desk surface.** The VM form's `Actions ▾` shows **Warm snapshot** on a
+  Running/Paused VM (beside *Snapshot (live)* and *Stop (memory snapshot)*); its
+  prompt names a title and calls `capture_warm_snapshot`.
+- **Method name.** It is `capture_warm_snapshot`, *not* `warm_snapshot`:
+  `warm_snapshot` is the Link **field** that records the golden a warm clone was
+  restored from, and a same-named method would be shadowed by the field value on
+  a hydrated doc.
+- **This action only *produces* the artifact.** The mechanics of the pair
+  (per-server validity, the host-signature compatibility guard, hard-linked
+  fan-out) and the discipline that makes restoring it *into clones* safe — the
+  in-guest `atlas-warm-freshen` unit baked by the Image Builder warm bake — live
+  in *Warm snapshot fan-out* above. An ad-hoc capture from a VM that was **not**
+  baked with that freshen unit is fine to restore onto its own VM (the fast
+  stop/start shape) but is not fan-out-safe; `clone_to_new_vm` is the consumer.
+
 ## Restore / Rebuild
 
 One controller method, `Virtual Machine.rebuild(source_type, source)`, on a
