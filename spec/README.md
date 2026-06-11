@@ -117,6 +117,7 @@ keep it the source of truth.
 12. [The reverse proxy](./12-proxy.md)
 13. [TLS & domain layer](./13-tls.md)
 14. [Self-serve sites](./14-self-serve.md)
+15. [Image builder](./15-image-builder.md)
 
 ## First run on a fresh site
 
@@ -188,6 +189,7 @@ operator-facing features add to this list; new tests follow it.
 | ------------------------------ | ------------------------------------------------------- | ---- |
 | Provision a server             | `Provider` → **Provision Server**                       | [03-bootstrapping.md](./03-bootstrapping.md) |
 | Sync an image to a server      | `Virtual Machine Image` → **Sync to Server / All**      | [08-images.md](./08-images.md) |
+| Bake an image                  | `Image Build` → **New / Re-bake**, or `Server` → **Bake Image** | [15-image-builder.md](./15-image-builder.md) |
 | Provision a virtual machine    | `Virtual Machine` → **Provision**                       | [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md) |
 | Operate a virtual machine      | `Virtual Machine` → **Start / Stop / Restart / Pause / Resume / Terminate** | [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md) |
 | Manage a VM's disk and size    | `Virtual Machine` → **Snapshot / Rebuild / Resize**; `Virtual Machine Snapshot` → **Restore to VM / Clone to new VM / Delete** | [05-virtual-machine-lifecycle.md](./05-virtual-machine-lifecycle.md) |

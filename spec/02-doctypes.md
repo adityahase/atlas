@@ -1378,3 +1378,63 @@ guest API creates it, fulfilment re-owns it). List scoping via `owner_only`
 
 - Columns: `email`, `subdomain`, `status`.
 - Standard filters: `status`.
+
+## Image Build
+
+One row per bake run of the [Image Builder](./15-image-builder.md): provision a
+scratch VM, run a recipe's `build.sh` in it over guest-SSH, snapshot the result,
+optionally register the snapshot. The `recipe` (from the code-defined
+[`image_recipes.RECIPES`](../atlas/atlas/image_recipes.py)) decides *what* is
+baked; this row is the operator-facing record of *a* bake — its status, its
+artifacts, its audit. The produced [Virtual Machine Snapshot](#virtual-machine-snapshot)
+is the durable output; the build VM is scratch.
+
+### Fields
+
+| Field | Type | Reqd | Read-only | Notes |
+| ----- | ---- | ---- | --------- | ----- |
+| `name` | series | Y | Y | `IMG-BUILD-#####` (`autoname: Expression`). A recipe is re-baked many times, so the name isn't the recipe. |
+| `recipe` | Select | Y |  | `bench` / `proxy` — the [recipe registry](../atlas/atlas/image_recipes.py) key. `set_only_once`. |
+| `title` | Data |  | Y | Denormalized from the recipe (e.g. "Golden bench image") for the list view. |
+| `server` | Link → Server | Y |  | The Active server the scratch build VM is provisioned on (no scheduler — principle #4). For a proxy recipe this also fixes the region. `set_only_once`. |
+| `region` | Data |  |  | Proxy recipes only; required when the recipe `is_proxy`. Drives the finalize hook + the produced VM's `region`. `set_only_once`. |
+| `base_image` | Link → Virtual Machine Image |  |  | The stock Ubuntu base the build VM boots. Defaults from `placement.default_image()`. `set_only_once`. |
+| `status` | Select |  | Y | `Draft` → `Provisioning` → `Building` → `Snapshotting` → `Available` / `Failed`. The single source of truth for the live checklist. Controller-written. |
+| `build_virtual_machine` | Link → Virtual Machine |  | Y | The scratch VM this build provisioned + baked. |
+| `snapshot` | Link → Virtual Machine Snapshot |  | Y | **The output** — what site/proxy VMs clone from. |
+| `build_task` | Link → Task |  | Y | The guest `build.sh` run's Task row (stdout/stderr/exit). Linked even on a failed build. |
+| `auto_register` | Check |  |  | Default on. If the recipe has a `registers_as`, wire the snapshot into that Atlas Settings field on success (bench → `default_bench_snapshot`). Ignored by recipes with nothing to register (proxy). |
+| `terminate_build_vm` | Check |  |  | Default off. If set, terminate the scratch build VM after a successful snapshot. Off leaves it Stopped for re-bake / inspection (the snapshot is durable and outlives it — [14-self-serve.md](./14-self-serve.md)). |
+| `error` | Small Text |  | Y | The stderr tail on `Failed` (full log in the Build Task). |
+
+The identity tuple (`recipe`, `server`, `region`, `base_image`) is immutable after
+insert — re-baking with different inputs is a new row, guarded in `validate()`.
+
+### Controller methods & lifecycle
+
+- `before_insert()` — resolve the recipe, copy `title`, default `base_image`,
+  require a `region` for an `is_proxy` recipe, set `status = Draft`.
+- `after_insert()` — enqueue `run` on `queue="long"` (it SSHes + waits ~10–20 min).
+- `run(image_build_name)` — the bake orchestration (provision → build → stop +
+  snapshot → register → optional terminate), committing + pushing
+  `image_build_progress` realtime on each transition. Fail-loud (`status = Failed`
+  + `error`, re-raise). No-op if not `Draft`. Full step table in
+  [15-image-builder.md](./15-image-builder.md).
+- `rebake()` — reset an Available/Failed row to `Draft` and re-enqueue (idempotent
+  retry).
+
+### Permissions
+
+`System Manager` full; **not** in `_OWNED_DOCTYPES` — invisible and access-denied
+to the SPA `Atlas User`, like `Provider` / `Server` / `Task`.
+
+### List view
+
+- Columns: `recipe`, `status`, `snapshot`.
+- Standard filters: `recipe`, `status`, `region`, `server`.
+
+### Buttons
+
+- **Bake Image** lives on the `Server` form (`Actions ▾`, parity with **Sync
+  Image**) and inserts an `Image Build` on that server.
+- **Re-bake** on an Available/Failed `Image Build` form re-runs the pipeline.
