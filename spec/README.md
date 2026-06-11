@@ -248,8 +248,8 @@ filenames mirror the table above (`server_provisioning.py`,
 `image_sync.py`, `virtual_machine_provisioning.py`,
 `virtual_machine_lifecycle.py`, `virtual_machine_snapshot.py`,
 `reserved_ip_inbound.py`, `proxy_vm.py`, `tls_issuance.py`,
-`self_serve_site.py`, `run_task.py`, `desk_buttons.py`,
-`digitalocean_client.py`, `ssh_primitive.py`).
+`self_serve_site.py`, `warm_restore.py`, `run_task.py`,
+`desk_buttons.py`, `digitalocean_client.py`, `ssh_primitive.py`).
 
 Each use-case module is the **single source of truth** for that
 operation's end-to-end coverage. It owns:
@@ -369,6 +369,18 @@ It also asserts the **Contract-C negative** on the real path — an unverified
 invoked directly (not folded into `run_all_smoke`); its `auto_provision`
 chain is driven by the **background worker** (the same worker the VM
 provisioning e2e relies on), so the worker must be up.
+
+The **warm restore** use case (`warm_restore.run_smoke`) covers the warm
+snapshot fan-out ([05](./05-virtual-machine-lifecycle.md), [15](./15-image-builder.md)):
+a warm bake (`Image Build`, `warm=1`) on the shared droplet, then two clones
+restored from the one golden — asserting per-clone identity (distinct
+hostname / machine-id / SSH host key, `/etc/atlas-vm-uuid` adopted), the
+shared `boot_id` that proves a restore rather than a boot, warm serving of the
+baked `site.local` with no deploy step, the real `deploy_site` rename on a
+warm clone, and the cold-boot fallback when the captured host signature is
+tampered. Heavy (a full bench bake on first run) and so invoked directly, not
+folded into `run_all_smoke`; re-runs reuse the server's Available warm golden.
+It needs the background worker (clone auto-provision).
 
 Every e2e-created droplet is tagged `atlas-e2e`. The harness pre-sweep
 prints droplets older than 30 minutes so the operator can delete them

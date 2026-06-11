@@ -60,11 +60,13 @@ the `build_entrypoint` run over guest-SSH, the build-VM sizing
 (`vcpus`/`memory_megabytes`/`disk_gigabytes`), the `snapshot_title` stamped on the
 output, the `task_script` name for the audit row, top-level `exclude` entries (the
 proxy's dev-only `test/` harness), a `finalize` callback, a `registers_as` Atlas
-Settings field, and `is_proxy`. Two recipes ship:
+Settings field, `is_proxy`, and an optional `warm_entrypoint` (the in-guest script
+a **warm bake** runs before the paused capture — see *The warm bake* below; empty
+means the recipe only bakes cold). Two recipes ship:
 
 | Recipe | Tree | Build VM | Snapshot | Special |
 | ------ | ---- | -------- | -------- | ------- |
-| `bench` | `bench/` | 2 vCPU / 2 GB / 12 GB | `golden-bench` | `registers_as = default_bench_snapshot` |
+| `bench` | `bench/` | 2 vCPU / 2 GB / 12 GB | `golden-bench` | `registers_as = default_bench_snapshot`, `warm_entrypoint = warm.sh` |
 | `proxy` | `proxy/` | 2 vCPU / 1 GB / 10 GB | `proxy-image` | `exclude = ("test",)`, `finalize = _finalize_proxy`, `is_proxy` |
 
 The recipe **subsumes the per-module constants** that used to live in the build
@@ -140,7 +142,7 @@ in-place edit (the same shape as `Site` / `Virtual Machine`).
    | ---- | ------ | ------ |
    | 1 | Provision a scratch build VM at the recipe's size on `server` from `base_image` (an `is_proxy` recipe stamps `is_proxy` + `region`). **Commit**, then wait for its own after_insert provision job to reach Running. | `Provisioning` |
    | 2 | `run_build(vm, recipe)` — upload the tree + run `build.sh` in the guest (+ finalize). Links the `build_task`. | `Building` |
-   | 3 | Stop the build VM and `snapshot(title=recipe.snapshot_title)`; link it into `snapshot`. | `Snapshotting` → `Available` |
+   | 3 | Cold (default): stop the build VM and `snapshot(title=recipe.snapshot_title)`. **Warm** (`warm` checked): run the warm finalize instead — see below. Link it into `snapshot`. | `Snapshotting` → `Available` |
    | 4 | If `auto_register` and the recipe has `registers_as`, write the snapshot into that Atlas Settings field. | (still `Available`) |
    | 5 | If `terminate_build_vm`, terminate the scratch build VM. | |
 
@@ -162,6 +164,52 @@ The **commit-before-wait** in step 1 is load-bearing and copied from
 **separate** transaction that can't run until this one commits. Holding the
 transaction open and blocking on the wait would deadlock the boot, time out, and
 roll back the VM row — orphaning its boot job.
+
+### The warm bake (`warm`)
+
+A bench bake with **`warm`** checked produces a `kind=Warm`
+`Virtual Machine Snapshot` — the fan-out golden of
+[05-virtual-machine-lifecycle.md → Warm snapshot fan-out](./05-virtual-machine-lifecycle.md#warm-snapshot-fan-out-one-golden-n-restored-clones):
+clones of it **resume** a pre-warmed, already-serving guest instead of booting
+one. Where the cold golden's contract is "bench installed, everything
+stopped", the warm bake's is the opposite — whatever is resident in the
+guest's RAM at the pause is exactly what every clone wakes into. Step 3
+becomes:
+
+1. **Arm the guest** — run the recipe's `warm_entrypoint` (`bench/warm.sh`)
+   over guest-SSH, recorded as a `bench-warm` Task. It installs and starts the
+   **identity freshen unit** (`atlas-warm-freshen`, which must be alive
+   mid-loop at the capture instant), runs `bench setup production` against the
+   baked `site.local` **with `listen [::]:80;` added to the vhosts** (the
+   clone is probed and served over its /128 — a v4-only frozen nginx fails
+   every real probe), **pre-warms with real localhost HTTP on both families**
+   (an Administrator login + `/app`, `/login`, pings — so gunicorn workers,
+   the MariaDB buffer pool, compiled assets and bootinfo are resident in the
+   RAM about to be frozen), deletes the systemd random-seed (clone-entropy
+   hygiene), and ends with a **`sync`**: the disk snapshot below is
+   crash-consistent, so anything still dirty in the page cache would exist in
+   the frozen RAM (restores see it) but not on the captured disk — the
+   cold-boot fallback would boot a guest with no freshen unit and never become
+   reachable (proven on a real host).
+2. **Capture at one paused instant** — `warm-snapshot-vm.py` pauses the vCPUs,
+   `PUT /snapshot/create`s the memory pair, takes the LVM thin snapshot of the
+   disk **while still paused** (the pair is only valid together), moves the
+   pair to the durable `/var/lib/atlas/snapshots/<name>/`, records the host
+   signature beside it, and resumes. Fail-loud — a bake step, not an
+   opportunistic fast path.
+3. **Register + supersede** — the row captures the machine config (vcpus,
+   memory) and tap name the vmstate pins; older Warm rows on the same server
+   are trashed (one current warm golden per server; their `on_trash` removes
+   the LV + memory directory). Then the build VM is stopped — the warmth lives
+   in the artifact, not the scratch VM.
+
+Only recipes with a `warm_entrypoint` can bake warm (`before_insert` rejects
+the rest); today that is `bench` only. `auto_register` applies as usual: the
+warm row is also a perfectly good **cold** golden (its disk carries the baked
+site + production config), so registering it as `default_bench_snapshot`
+gives one row both roles — the per-server warm resolution and the
+single-value cold fallback stay distinct *concepts* either way
+([14-self-serve.md](./14-self-serve.md)).
 
 ### The build VM is scratch; the snapshot is durable
 

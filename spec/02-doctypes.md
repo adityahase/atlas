@@ -438,6 +438,7 @@ deletion.
 | `has_memory_snapshot` | Check                      |      | Y         | 0       | The last stop captured a complete memory snapshot; the next Start resumes from it. Bookkeeping, not authority — the on-host `READY` marker decides at start time. Cleared when the snapshot is consumed (start) or invalidated (rebuild, resize, host-key rotation). |
 | `clone_source_rootfs` | Data                       |      | Y         |         | Internal, hidden. On-host snapshot rootfs to seed this VM's disk from (clone). Empty for a normal image-backed VM. `set_only_once`, `no_copy`. |
 | `clone_source_data_rootfs` | Data                  |      | Y         |         | Internal, hidden. On-host data-disk snapshot to seed this VM's data disk from (clone). Empty for a normal VM. `set_only_once`, `no_copy`. |
+| `warm_snapshot`    | Link → Virtual Machine Snapshot |    | Y         |         | Internal, hidden. The `Warm` snapshot this VM restores from (provision stages the memory pair + MMDS identity; see [05 § Warm snapshot fan-out](./05-virtual-machine-lifecycle.md#warm-snapshot-fan-out-one-golden-n-restored-clones)). Empty for every ordinary VM. `set_only_once`, `no_copy`. |
 | `ipv6_address`     | Data                          |      | Y         |         | From the server's /124. Set in `before_insert`.                  |
 | `public_ipv4`      | Data                          |      | Y         |         | The attached public IPv4, denormalized from the `Reserved IP` row whose `virtual_machine` points here. Empty until one is attached. Maintained by `Reserved IP.attach()` / `detach()` (and cleared on terminate); never hand-edited. See [Reserved IP](#reserved-ip) and [06-networking.md](./06-networking.md). |
 | `mac_address`      | Data                          |      | Y         |         | Derived from `name`. Set in `before_validate`.                   |
@@ -561,12 +562,16 @@ Tiering is keyed off `status` — see [10-desk-ui.md § Virtual Machine](./10-de
 
 ## Virtual Machine Snapshot
 
-A disk snapshot of one VM at a point in time — **both** its disks: the root
-`rootfs.ext4` (LV `atlas-snap-<id>`) and, when the VM has one, the data disk
-(LV `atlas-datasnap-<id>`, same snapshot UUID). Not a Firecracker memory-state
-snapshot. Created from a Stopped VM; the snapshot LVs live in the thin pool
-(`/dev/atlas/`), independent of the VM directory. Restore and clone recreate
-both disks; see [05 § Snapshot/Restore](./05-virtual-machine-lifecycle.md).
+A snapshot of one VM at a point in time. The default `kind=Cold` is a **disk**
+snapshot — **both** disks: the root `rootfs.ext4` (LV `atlas-snap-<id>`) and,
+when the VM has one, the data disk (LV `atlas-datasnap-<id>`, same snapshot
+UUID) — created from a Stopped VM; the snapshot LVs live in the thin pool
+(`/dev/atlas/`), independent of the VM directory. `kind=Warm` pairs the disk
+LV with the guest's **frozen memory state** captured at one paused instant of
+a Running pre-warmed VM (the fan-out golden — clones *resume* it; produced
+only by the Image Builder's warm bake, never by the Snapshot button). Restore
+and clone recreate the disks; see
+[05 § Snapshot/Restore + Warm snapshot fan-out](./05-virtual-machine-lifecycle.md).
 
 ### Fields
 
@@ -586,6 +591,13 @@ both disks; see [05 § Snapshot/Restore](./05-virtual-machine-lifecycle.md).
 | `rootfs_path`     | Data                          |      | Y         |         | Absolute on-host path to the snapshot rootfs.                    |
 | `data_size_bytes` | Long Int                      |      | Y         | 0       | Bytes of the data-disk snapshot (`0` if none). `Long Int`.       |
 | `data_rootfs_path`| Data                          |      | Y         |         | On-host device path of the data-disk snapshot LV (`atlas-datasnap-<id>`); empty if the VM had no data disk. |
+| `kind`            | Select                        | Y    | Y         | Cold    | `Cold` (disk-only) or `Warm` (disk + frozen memory pair; clones resume). |
+| `memory_directory`| Data                          |      | Y         |         | Warm only: the durable on-host `/var/lib/atlas/snapshots/<name>/` holding `vmstate.bin`/`mem.bin`/`host-signature.json`. Host-local, never synced; removed by `on_trash`. |
+| `memory_bytes`    | Long Int                      |      | Y         |         | Warm only: on-disk size of the captured memory file.             |
+| `vcpus`           | Int                           |      | Y         |         | Warm only: captured machine config — a warm clone must restore at exactly this size (the vmstate encodes it). |
+| `memory_megabytes`| Int                           |      | Y         |         | Warm only: captured memory size; same pinning rule as `vcpus`.   |
+| `tap_device`      | Data                          |      | Y         |         | Warm only: the golden's in-netns tap name. The vmstate binds the tap by name, so every warm clone's netns recreates it verbatim (netns-scoped; no collision). |
+| `host_signature`  | Small Text                    |      | Y         |         | Warm only: CPU model/flags hash/microcode + host kernel + Firecracker version at capture (JSON). `vm-restore.py` cold-boots a clone when the live host differs. |
 
 ### Form layout
 
@@ -605,6 +617,14 @@ data_disk_format_and_mount
   rootfs_path
   data_size_bytes
   data_rootfs_path
+── Warm Snapshot ── (fields shown only when kind=Warm)
+kind
+memory_directory
+memory_bytes
+| vcpus
+  memory_megabytes
+  tap_device
+  host_signature
 ```
 
 ### List view
@@ -619,10 +639,17 @@ data_disk_format_and_mount
   so the Stopped-state guard lives in one place. Returns the Task name.
 - `clone_to_new_vm(title, ssh_public_key, vcpus?, memory_megabytes?,
   disk_gigabytes?)` — create a new VM seeded from this snapshot (fresh
-  identity). Disk defaults to the snapshot's size and can only grow.
+  identity). Disk defaults to the snapshot's size and can only grow. On a
+  `Warm` snapshot the clone *restores* instead: vcpus/memory/disk are pinned
+  to the captured values (mismatched overrides are rejected; only the cgroup
+  `cpu_max_cores` cap is free), and the clone carries `warm_snapshot` +
+  the golden's `tap_device` so provision stages the memory pair + MMDS
+  identity.
 - `on_trash` — runs [`delete-snapshot-vm.py`](../scripts/delete-snapshot-vm.py)
   to delete the on-host files, skipped when the VM is already Terminated
-  (its directory is gone).
+  (its directory is gone). A `Warm` row also removes its durable
+  `memory_directory` (clone jails hold hard links, so already-provisioned
+  clones are unaffected).
 
 ### Buttons
 
@@ -1404,6 +1431,7 @@ is the durable output; the build VM is scratch.
 | `snapshot` | Link → Virtual Machine Snapshot |  | Y | **The output** — what site/proxy VMs clone from. |
 | `build_task` | Link → Task |  | Y | The guest `build.sh` run's Task row (stdout/stderr/exit). Linked even on a failed build. |
 | `auto_register` | Check |  |  | Default on. If the recipe has a `registers_as`, wire the snapshot into that Atlas Settings field on success (bench → `default_bench_snapshot`). Ignored by recipes with nothing to register (proxy). |
+| `warm` | Check |  |  | Default off. Bake a **warm** golden: after the build, run the recipe's `warm_entrypoint` (production stack up + pre-warm + freshen unit), then capture memory + disk at one paused instant into a `kind=Warm` snapshot clones *resume*. Per-server; supersedes the server's previous warm row. Rejected for recipes without a `warm_entrypoint`. `set_only_once`. See [15 § The warm bake](./15-image-builder.md#the-warm-bake-warm). |
 | `terminate_build_vm` | Check |  |  | Default off. If set, terminate the scratch build VM after a successful snapshot. Off leaves it Stopped for re-bake / inspection (the snapshot is durable and outlives it — [14-self-serve.md](./14-self-serve.md)). |
 | `error` | Small Text |  | Y | The stderr tail on `Failed` (full log in the Build Task). |
 

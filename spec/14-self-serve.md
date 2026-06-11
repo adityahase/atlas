@@ -195,6 +195,24 @@ host-sizing note below.
 `DoesNotExistError` on the dangling `virtual_machine` link; it now fails loud with
 a clear message only if a caller passes *no* sizing and the source is gone.)
 
+### Warm-first provisioning
+
+`Site._provision_backing_vm` is **warm-first**: the server choice still follows
+the cold golden's row (above), but when that server carries an `Available`
+`kind=Warm` snapshot (`placement.warm_bench_snapshot_for_server` — per-server,
+because a memory snapshot only restores on the host it was captured on), the
+clone **resumes** the pre-warmed golden instead of booting it
+([05-virtual-machine-lifecycle.md → Warm snapshot fan-out](./05-virtual-machine-lifecycle.md#warm-snapshot-fan-out-one-golden-n-restored-clones)):
+the signup's backing VM is serving the baked `site.local` within low seconds of
+provision, and only the per-site rename remains. Warm is **strictly an
+accelerator** with two independent degrade-to-cold layers: no warm row on the
+server → today's exact cold-clone path; a host that drifted under a stale row
+(live migration, kernel/Firecracker upgrade) → `vm-restore.py`'s signature
+guard cold-boots the warm disk, which still deploys correctly. A warm clone
+restores at the **captured** vcpus/memory (the frozen vmstate pins them;
+`clone_to_new_vm` rejects overrides) — only the tier's `cpu_max_cores` cgroup
+cap is applied, so capacity accounting is unchanged.
+
 ## The in-guest deploy (`deploy-site.py`) *(built)*
 
 The one piece that runs `bench` *inside* the guest. The controller side is

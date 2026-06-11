@@ -315,6 +315,106 @@ snapshot of a Stopped VM mutates nothing and leaves it valid.
   `snapshot-stop-vm.py` detects them and falls back; re-provisioning
   regenerates the launcher and enables the fast path.
 
+## Warm snapshot fan-out: one golden, N restored clones
+
+The fast stop/start above is Firecracker's *secure* shape — one snapshot, one
+VM, resumed exactly once. Fan-out is the *other* shape: **one durable warm
+golden snapshot restored into many brand-new clones**, cutting a clone's first
+provision from a cold boot (~17s+ on a fast host, minutes under a shared-tier
+CPU cap) to **low seconds** — the resumed guest is already booted, already
+warm, already serving. Firecracker calls resuming one state more than once
+"insecure by default" (duplicated identity, RNG, clocks); this section is the
+discipline that makes it safe. The first consumer is self-serve signup
+([14-self-serve.md](./14-self-serve.md)); the producer is the Image Builder's
+warm bake ([15-image-builder.md](./15-image-builder.md)).
+
+**The artifact.** A `Virtual Machine Snapshot` with `kind=Warm` is a **matched
+pair captured at one paused instant** of a pre-warmed golden VM: the disk (an
+ordinary LVM thin snapshot LV) plus the guest's full memory state
+(`vmstate.bin` + `mem.bin`), written by `warm-snapshot-vm.py` to a durable
+per-snapshot directory `/var/lib/atlas/snapshots/<name>/` beside a
+`host-signature.json` (CPU model + flags hash + microcode, host kernel,
+Firecracker version — `scripts/lib/atlas/hostinfo.py`). The pair is only valid
+together: the frozen RAM's filesystem cache references exactly those disk
+blocks. The row also captures the golden's **machine config** (vcpus, memory)
+and **tap name** — the vmstate pins all three. No `READY` marker is ever left
+in the *golden's* jail: the golden itself must never resume from the pair.
+
+**Warm snapshots are per-server.** A memory snapshot only restores on a
+matching CPU model / host kernel / Firecracker build (Intel↔AMD never; and
+DigitalOcean's Premium tier guarantees only "one of the latest two" CPU
+generations, with live migration free to move a droplet between physical
+hosts). So the warm artifact lives and is resolved **by server**
+(`placement.warm_bench_snapshot_for_server`), is never synced off the host,
+and one current warm golden is kept per server (a new warm bake supersedes the
+old row; its `on_trash` removes the LV and the memory directory). Like the
+fast-path snapshot it is **a cache keyed by a DB row**: losing it costs a cold
+boot, nothing durable.
+
+**Restore as a provision mode.** A warm clone is an ordinary clone
+(`clone_to_new_vm`) whose row carries `warm_snapshot`; `provision-vm.py` then
+diverges from the cold path in exactly four ways:
+
+- **The disk is a byte-exact CoW of the golden** — no grow, no
+  `tune2fs -U random`, and **no identity injection**. Mounting and mutating
+  the clone's disk offline would corrupt the resumed guest: the frozen
+  kernel's ext4 caches (bitmaps, inodes, dentries) must keep matching the
+  device underneath. This is also why a warm clone restores at the captured
+  disk/vcpus/memory exactly (`clone_to_new_vm` rejects mismatched overrides;
+  the cgroup `cpu_max_cores` cap stays free — it is host-side, invisible to
+  the guest).
+- **The identity travels over MMDS, not the disk.** Every VM's
+  `firecracker.json` now carries `mmds-config` (V1, eth0 — inert unless data
+  is staged). Provision writes the clone's identity payload (uuid, hostname,
+  machine-id, IPv6, the NAT44 /30, SSH public key — the same derivations
+  `inject_identity` uses) to `metadata.json` in the jail. `vm-restore.py`
+  PUTs it into MMDS between load and resume; on the cold-boot fallback the
+  launcher preloads it via `--metadata`. The golden was baked with an
+  **in-guest freshen unit** (`atlas-warm-freshen`, installed by the warm
+  bake) alive mid-loop at capture: every clone wakes with it running, and it
+  adopts the identity — fresh SSH host keys *first* (so the controller's
+  first successful connection pins the clone's key, never the golden's),
+  machine-id/hostname/authorized_keys, the on-disk network env (so a later
+  plain reboot boots correctly), then the live addresses *last* (becoming
+  reachable on the clone's own /128 is the externally visible "freshen
+  done"), a time-sync kick, and `/etc/atlas-vm-uuid` as the applied marker.
+- **The memory pair is hard-linked, the marker is per-clone.** Provision
+  stages `snapshot/{vmstate.bin,mem.bin}` as **hard links to the durable
+  golden files** (N clones CoW-share one read-only mem file; inodes stay
+  root-owned 0644 so any per-VM uid can map them — `MAP_PRIVATE` never
+  writes back), copies the host signature beside them, and writes the
+  `READY` marker **last**. From there the fast-path machinery above runs
+  unchanged: marker → idle launch → `vm-restore.py` loads, consumes the
+  marker (only ever the marker — never the shared link targets), resumes.
+  The pair is staged only when this provision *created* the disk (or a prior
+  staging was never consumed): RAM must never be restored over a disk that
+  has diverged.
+- **The tap keeps the golden's name.** The vmstate binds the tap device by
+  name, so the clone's row pins `tap_device` to the captured name and its
+  netns recreates it verbatim — tap names are netns-scoped, so N clones never
+  collide, and the host-side addresses/routes stay the clone's own.
+
+**The compatibility guard.** Before loading, `vm-restore.py` compares the
+staged `host-signature.json` against the live host. On mismatch (a live
+migration under us, a kernel or Firecracker upgrade) it consumes the marker
+and fails the start; the relaunch **cold-boots the warm disk** — slower,
+always correct, and the `--metadata` path still delivers the clone its
+identity, so the fallback clone is fully usable. The same-VM fast path stages
+no signature (same host by construction) and skips the check. The per-server
+resolution is therefore only an *optimistic* pick; the host guard is the
+authority.
+
+**Boot_id is the tell.** Two warm clones share one `boot_id` (both resumed
+the same frozen instant) — accepted, like the stale clock. Everything
+identity-bearing (host keys, machine-id, hostname, addresses) is per-clone by
+the freshen, and the bake deletes the systemd random-seed. The kernel CSPRNG
+is NOT left to Firecracker's VMGenID reseed alone: that reseed has a
+documented race window, and two clones whose freshen won the race generated
+**identical SSH host keys** on a real host — so the freshen first mixes
+per-clone data into the entropy pool and forces a reseed (`RNDRESEEDCRNG`)
+before any key material is generated. The e2e (`warm_restore`) uses the
+shared boot_id as the proof that a restore — not a boot — happened.
+
 ## Stop / Terminate protection
 
 Two optional, operator-set flags on `Virtual Machine` guard the destructive
@@ -482,9 +582,12 @@ to rewrite the keys. The desk surfaces it as a **Regenerate host keys** action
 `Virtual Machine Snapshot.clone_to_new_vm(title, ssh_public_key, …)` creates a
 **new** VM whose initial disk is seeded from the snapshot's rootfs. The clone
 is a fresh VM — new UUID, IPv6, MAC, SSH host keys and machine-id (all
-re-derived at provision). It is a *disk template*, not a memory-state resume:
-the safe path that avoids the duplicate-identity hazard of resuming the same
-running state twice.
+re-derived at provision). For the default `kind=Cold` snapshot it is a *disk
+template*, not a memory-state resume: the safe path that avoids the
+duplicate-identity hazard of resuming the same running state twice. A
+`kind=Warm` snapshot clones into a **restored** VM instead — same method, but
+the clone resumes the golden's frozen memory at the captured size and adopts
+its identity post-resume (see *Warm snapshot fan-out* above).
 
 Mechanically the clone reuses the normal provision flow: the new VM row
 carries an internal `clone_source_rootfs` field (the snapshot's LV device

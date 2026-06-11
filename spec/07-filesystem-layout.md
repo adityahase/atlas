@@ -20,9 +20,11 @@ else.
 │   │   │       ├── data.ext4          # block-special node → the VM's data disk LV (only if it has one)
 │   │   │       ├── vmlinux            # hard-link to the image kernel
 │   │   │       ├── run/firecracker.socket  # Firecracker API socket
-│   │   │       └── snapshot/          # pending memory snapshot (fast stop/start), absent after a cold stop
-│   │   │           ├── vmstate.bin    # Firecracker vmstate, written by /snapshot/create
-│   │   │           ├── mem.bin        # guest RAM (RAM-sized file)
+│   │   │       ├── metadata.json      # warm clones only: the MMDS identity payload (staged by provision)
+│   │   │       └── snapshot/          # pending memory snapshot (fast stop/start OR a staged warm pair), absent after a cold stop
+│   │   │           ├── vmstate.bin    # Firecracker vmstate (warm clone: hard link to the golden's)
+│   │   │           ├── mem.bin        # guest RAM (warm clone: hard link, CoW-shared by N clones)
+│   │   │           ├── host-signature.json  # warm clones only: vm-restore.py's compatibility guard
 │   │   │           └── READY          # marker: the pair is complete; consumed by vm-restore.py
 │   │   ├── network.env               # TAP/IPV6 + IPV4_HOST/GUEST_CIDR + netns + veth names
 │   │   ├── jailer-launch.sh          # generated launcher the unit execs (uid/gid, netns, cgroup/rlimit baked in)
@@ -30,6 +32,12 @@ else.
 │   │       └── firecracker.log
 │   ├── 19ae...                       # one directory per VM, named by UUID
 │   └── ...
+│
+├── snapshots/                        # durable warm-golden artifacts, one dir per Warm snapshot row
+│   └── <snapshot-uuid>/
+│       ├── vmstate.bin               # captured at one paused instant with the disk LV
+│       ├── mem.bin                   # the golden's RAM; hard-linked (read-only) into clone jails
+│       └── host-signature.json       # CPU/kernel/Firecracker at capture
 │
 ├── run/                              # (legacy; API socket now lives in the jail)
 │
@@ -44,6 +52,7 @@ else.
     ├── vm-disk-up.py                 # ExecStartPre: re-activate the VM's disk LV + refresh its jail node
     ├── vm-restore.py                 # ExecStartPost: resume a pending memory snapshot (no-op on cold boot)
     └── atlas/                        # the durable stdlib-only package the hooks + atlas-pool.service import
+        ├── hostinfo.py               # host signature (CPU/kernel/FC) for the warm-restore guard
         ├── lvm.py                    # ThinPool/LogicalVolume (successor to lvm.sh)
         ├── network_env.py            # read network.env, find default route device
         ├── paths.py                  # VirtualMachinePaths, image_directory
