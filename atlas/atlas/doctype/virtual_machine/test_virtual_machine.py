@@ -453,11 +453,25 @@ class TestVirtualMachine(IntegrationTestCase):
 
 	# --- memory snapshots (fast stop/start) ---
 
-	def test_stop_captures_memory_snapshot_by_default(self) -> None:
+	def test_stop_plain_by_default(self) -> None:
+		# Without the opt-in, stop is the plain unit stop — the default path.
+		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
+
+		vm = _new_vm()  # memory_snapshot_on_stop defaults OFF
+		vm.db_set("status", "Running")
+		vm.reload()
+		with patch.object(module, "run_task", return_value=fake_task(name="task-stop")) as mocked:
+			vm.stop()
+		vm.reload()
+		self.assertEqual(vm.status, "Stopped")
+		self.assertEqual(mocked.call_args.kwargs["script"], "stop-vm.py")
+		self.assertFalse(vm.has_memory_snapshot)
+
+	def test_stop_captures_memory_snapshot_when_opted_in(self) -> None:
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 		from atlas.atlas.networking import derive_uid
 
-		vm = _new_vm()  # memory_snapshot_on_stop defaults on
+		vm = _new_vm(memory_snapshot_on_stop=1)
 		vm.db_set("status", "Running")
 		vm.reload()
 		task = fake_task(
@@ -479,7 +493,7 @@ class TestVirtualMachine(IntegrationTestCase):
 		# reports memory_snapshot=false; the row must not claim a snapshot.
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
-		vm = _new_vm()
+		vm = _new_vm(memory_snapshot_on_stop=1)
 		vm.db_set("status", "Running")
 		vm.reload()
 		task = fake_task(
@@ -492,17 +506,22 @@ class TestVirtualMachine(IntegrationTestCase):
 		self.assertEqual(vm.status, "Stopped")
 		self.assertFalse(vm.has_memory_snapshot)
 
-	def test_stop_plain_when_memory_snapshot_disabled(self) -> None:
+	def test_stop_memory_snapshot_explicit_override(self) -> None:
+		# stop(memory_snapshot=True) opts in for one stop without the field.
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
-		vm = _new_vm(memory_snapshot_on_stop=0)
+		vm = _new_vm()  # field off
 		vm.db_set("status", "Running")
 		vm.reload()
-		with patch.object(module, "run_task", return_value=fake_task(name="task-stop")) as mocked:
-			vm.stop()
+		task = fake_task(
+			name="task-stop-once",
+			stdout='ATLAS_RESULT={"memory_snapshot": true, "reason": "", "memory_snapshot_bytes": 1}',
+		)
+		with patch.object(module, "run_task", return_value=task) as mocked:
+			vm.stop(memory_snapshot=True)
 		vm.reload()
-		self.assertEqual(mocked.call_args.kwargs["script"], "stop-vm.py")
-		self.assertFalse(vm.has_memory_snapshot)
+		self.assertEqual(mocked.call_args.kwargs["script"], "snapshot-stop-vm.py")
+		self.assertTrue(vm.has_memory_snapshot)
 
 	def test_start_consumes_the_memory_snapshot(self) -> None:
 		# The start consumes the on-host marker whether it restored or cold-booted,
@@ -520,10 +539,11 @@ class TestVirtualMachine(IntegrationTestCase):
 		self.assertFalse(vm.has_memory_snapshot)
 
 	def test_restart_cold_skips_the_memory_snapshot(self) -> None:
-		# cold=True is the true-reboot escape hatch: plain stop, full cold boot.
+		# cold=True is the true-reboot escape hatch even on an opted-in VM:
+		# plain stop, full cold boot.
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
-		vm = _new_vm()
+		vm = _new_vm(memory_snapshot_on_stop=1)
 		vm.db_set("status", "Running")
 		vm.reload()
 		stop_task = fake_task(name="task-stop")
@@ -534,9 +554,10 @@ class TestVirtualMachine(IntegrationTestCase):
 		self.assertEqual(mocked.call_args_list[1].kwargs["script"], "start-vm.py")
 
 	def test_restart_power_cycles_via_memory_snapshot(self) -> None:
+		# An opted-in VM's restart is a state-preserving power cycle.
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
-		vm = _new_vm()
+		vm = _new_vm(memory_snapshot_on_stop=1)
 		vm.db_set("status", "Running")
 		vm.reload()
 		stop_task = fake_task(

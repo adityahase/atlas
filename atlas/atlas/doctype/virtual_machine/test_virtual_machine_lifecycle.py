@@ -10,12 +10,6 @@ from atlas.atlas.doctype.virtual_machine.test_virtual_machine import (
 )
 from atlas.tests._mocks import fake_task
 
-# What a successful snapshot-stop-vm.py prints; stop() parses it back. Tests
-# that exercise stop() on its default (memory-snapshot) path reuse this.
-_SNAPSHOT_STOP_STDOUT = (
-	'ATLAS_RESULT={"memory_snapshot": true, "reason": "", "memory_snapshot_bytes": 536870912}'
-)
-
 
 def _vm_with_status(status: str) -> "frappe.model.document.Document":
 	vm = _new_vm()
@@ -59,18 +53,18 @@ class TestVirtualMachineLifecycle(IntegrationTestCase):
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
 		vm = _vm_with_status("Running")
-		# stop() defaults to the memory-snapshot fast path (memory_snapshot_on_stop
-		# is on by default) and parses the typed result back.
-		task = fake_task(name="task-stop-1", stdout=_SNAPSHOT_STOP_STDOUT)
+		# stop() defaults to the plain unit stop; the memory-snapshot fast path
+		# is opt-in via memory_snapshot_on_stop (covered in test_virtual_machine).
+		task = fake_task(name="task-stop-1")
 		with patch.object(module, "run_task", return_value=task) as mocked:
 			result = vm.stop()
 		self.assertEqual(result, "task-stop-1")
 		vm.reload()
 		self.assertEqual(vm.status, "Stopped")
 		self.assertIsNotNone(vm.last_stopped)
-		self.assertTrue(vm.has_memory_snapshot)
+		self.assertFalse(vm.has_memory_snapshot)
 		mocked.assert_called_once()
-		self.assertEqual(mocked.call_args.kwargs["script"], "snapshot-stop-vm.py")
+		self.assertEqual(mocked.call_args.kwargs["script"], "stop-vm.py")
 
 	def test_stop_from_stopped_raises(self) -> None:
 		vm = _vm_with_status("Stopped")
@@ -81,13 +75,13 @@ class TestVirtualMachineLifecycle(IntegrationTestCase):
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
 		vm = _vm_with_status("Running")
-		stop_task = fake_task(name="task-stop-r", stdout=_SNAPSHOT_STOP_STDOUT)
+		stop_task = fake_task(name="task-stop-r")
 		start_task = fake_task(name="task-start-r")
 		with patch.object(module, "run_task", side_effect=[stop_task, start_task]) as mocked:
 			result = vm.restart()
 		self.assertEqual(result, {"stop_task": "task-stop-r", "start_task": "task-start-r"})
 		self.assertEqual(mocked.call_count, 2)
-		self.assertEqual(mocked.call_args_list[0].kwargs["script"], "snapshot-stop-vm.py")
+		self.assertEqual(mocked.call_args_list[0].kwargs["script"], "stop-vm.py")
 		self.assertEqual(mocked.call_args_list[1].kwargs["script"], "start-vm.py")
 		vm.reload()
 		self.assertEqual(vm.status, "Running")
@@ -240,7 +234,7 @@ class TestVirtualMachineLifecycle(IntegrationTestCase):
 		vm = _vm_with_status("Running")
 		vm.status = "Paused"
 		vm.save(ignore_permissions=True)
-		with patch.object(module, "run_task", return_value=fake_task(name="task-stop-p", stdout=_SNAPSHOT_STOP_STDOUT)):
+		with patch.object(module, "run_task", return_value=fake_task(name="task-stop-p")):
 			vm.stop()
 		vm.reload()
 		self.assertEqual(vm.status, "Stopped")
@@ -466,7 +460,7 @@ class TestVirtualMachineLifecycle(IntegrationTestCase):
 		vm = _vm_with_status("Running")
 		vm.termination_protection = 1
 		vm.save(ignore_permissions=True)
-		with patch.object(module, "run_task", return_value=fake_task(name="task-stop-tp", stdout=_SNAPSHOT_STOP_STDOUT)):
+		with patch.object(module, "run_task", return_value=fake_task(name="task-stop-tp")):
 			vm.stop()
 		vm.reload()
 		self.assertEqual(vm.status, "Stopped")

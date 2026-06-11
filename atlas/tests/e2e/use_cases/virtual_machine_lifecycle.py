@@ -9,10 +9,12 @@ This module exercises:
 
 - Auto-provision (insert -> Running) -> Stop -> Start -> Restart ->
   Terminate, with a probe on every state.
-- The memory-snapshot fast path on the way: the default stop captures the
-  guest's memory (`has_memory_snapshot`), and the next start RESUMES it
-  instead of cold-booting (the start Task reports "restored from memory
-  snapshot") — the host fact only a real Firecracker round trip can prove.
+- The memory-snapshot fast path on the way: the VM is OPTED IN
+  (memory_snapshot_on_stop — the plain stop stays the default), so the stop
+  captures the guest's memory (`has_memory_snapshot`) and the next start
+  RESUMES it instead of cold-booting (the start Task reports "restored from
+  memory snapshot") — the host fact only a real Firecracker round trip can
+  prove.
 - Terminate again from Terminated throws.
 
 (Phase 4 dropped the Pending state guards from this use case — auto-provision
@@ -77,10 +79,13 @@ def _check_full_lifecycle(server_name: str, vm) -> None:
 	first_started = vm.last_started
 	assert_probe(server_name, "phase5-is-active.sh", VIRTUAL_MACHINE_NAME=vm.name)
 
-	# Stop. The default path captures the guest's full memory state first
-	# (snapshot-stop-vm.py); a freshly-provisioned VM's launcher supports the
-	# restore, so the fast path must actually engage — a silent fallback to the
-	# plain stop would pass every other assert and hide a broken snapshot path.
+	# Stop, opted into the memory-snapshot fast path (the plain stop is the
+	# default; this VM opts in to prove the capture/restore round trip). A
+	# freshly-provisioned VM's launcher supports the restore, so the fast path
+	# must actually engage — a silent fallback to the plain stop would pass
+	# every other assert and hide a broken snapshot path.
+	vm.db_set("memory_snapshot_on_stop", 1)
+	vm.reload()
 	vm.stop()
 	vm.reload()
 	assert vm.status == "Stopped", vm.status
