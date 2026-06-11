@@ -165,8 +165,9 @@ class VirtualMachine(Document):
 
 	@frappe.whitelist()
 	def stop(self, memory_snapshot: bool | None = None) -> str:
-		"""Stop a Running/Paused VM. With `memory_snapshot` (default: the VM's
-		memory_snapshot_on_stop flag), the stop Task first captures the guest's
+		"""Stop a Running/Paused VM. The default is the plain unit stop. With
+		`memory_snapshot` (default: the VM's memory_snapshot_on_stop flag, off
+		unless the operator opted in), the stop Task first captures the guest's
 		full memory state so the next Start resumes it in milliseconds; on any
 		snapshot failure the Task falls back to the plain stop on its own — the
 		VM always ends up Stopped, only the next Start's speed differs.
@@ -215,11 +216,12 @@ class VirtualMachine(Document):
 		"""Stop (if Running) then Start. Two Tasks. A Paused VM must resume or
 		stop first — restart is deliberately Running/Stopped only.
 
-		With memory_snapshot_on_stop set (the default), a restart is a
+		When the VM opted into memory_snapshot_on_stop, a restart is a
 		state-preserving POWER CYCLE: the stop captures the guest's memory and
 		the start resumes it — milliseconds, but the guest never reboots, so a
 		wedged guest stays wedged. Pass `cold=True` for a true reboot (plain
-		stop, full cold boot)."""
+		stop, full cold boot). Without the opt-in, restart is the plain
+		stop + cold boot it always was."""
 		if self.status not in ("Running", "Stopped"):
 			frappe.throw(f"Cannot restart from {self.status}")
 		cold = cold in (True, 1, "1", "true", "True", "yes")

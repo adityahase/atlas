@@ -239,8 +239,8 @@
    "label": "Termination Protection"
   },
   {
-   "default": "1",
-   "description": "Capture the VM's full memory state on stop() so the next Start resumes it in milliseconds instead of cold-booting. Restart then power-cycles back to the saved state rather than rebooting the guest — uncheck (or restart(cold=True)) for a true reboot.",
+   "default": "0",
+   "description": "Opt in: capture the VM's full memory state on stop() so the next Start resumes it in milliseconds instead of cold-booting. Restart then power-cycles back to the saved state rather than rebooting the guest. Off by default — the plain stop and cold boot remain the default path.",
    "fieldname": "memory_snapshot_on_stop",
    "fieldtype": "Check",
    "label": "Memory Snapshot on Stop"
