@@ -21,8 +21,12 @@ Site config keys (set with `bench --site <site> set-config -p <key> <value>`):
     atlas_ssh_key_id              vendor's handle for the uploaded SSH key
                                   (DigitalOcean only; required for DO — accepts
                                   DO's numeric key id or its SHA-256 fingerprint).
-    atlas_ssh_public_key          optional OpenSSH public key body for vendors
-                                  that upload at provision time
+    atlas_ssh_public_key          optional OpenSSH public key body. If omitted it
+                                  is DERIVED from atlas_ssh_private_key_path
+                                  (ssh-keygen -y) — self-serve needs it set on
+                                  Atlas Settings because the Site clone path reads
+                                  it, so the derivation makes a key-path-only
+                                  bootstrap stand up signup without extra config.
 
 DigitalOcean providers also need:
 
@@ -200,7 +204,7 @@ def restore_credentials() -> None:
 		require_config("atlas_ssh_key_id"),
 		update_modified=False,
 	)
-	public_key = frappe.conf.get("atlas_ssh_public_key")
+	public_key = _resolve_fleet_public_key()
 	if public_key:
 		frappe.db.set_single_value("Atlas Settings", "ssh_public_key", public_key, update_modified=False)
 	frappe.utils.password.set_encrypted_password(
@@ -247,7 +251,7 @@ def ensure_provider() -> "frappe.model.document.Document":
 			require_config("atlas_ssh_key_id"),
 			update_modified=False,
 		)
-	public_key = frappe.conf.get("atlas_ssh_public_key")
+	public_key = _resolve_fleet_public_key()
 	if public_key:
 		frappe.db.set_single_value("Atlas Settings", "ssh_public_key", public_key, update_modified=False)
 
@@ -545,7 +549,19 @@ def run_with_self_serve() -> None:
 	    prerequisite). Configured from the `atlas_smtp_*` keys.
 
 	Each step skips with a printed note when its inputs are absent, so this is a
-	safe drop-in for `run_with_proxy` — mirroring how the TLS tail degrades."""
+	safe drop-in for `run_with_proxy` — mirroring how the TLS tail degrades.
+
+	What this does NOT do (deliberately — both are billable host runs): bake the
+	golden bench snapshot, and provision the edge proxy VM. A fresh dev brings the
+	signup flow up in three steps:
+	  1. Bake the golden image once (leaves an Available golden-bench snapshot):
+	       bench --site <site> execute atlas.tests.e2e.use_cases.bench_image.run_smoke
+	  2. Run this (adopts that snapshot, seeds TLS + email):
+	       bench --site <site> execute atlas.bootstrap.run_with_self_serve
+	  3. Stand up a proxy VM in the region (so subdomains route + get TLS) — the
+	     proxy_vm use case, or the desk flow in spec/12-proxy.md.
+	Then `/signup` works end to end. A site VM needs ~2 GB RAM, so size the host
+	for the number of concurrent sites you expect."""
 	run_with_proxy()
 	ensure_default_bench_snapshot()
 	ensure_outbound_email()
@@ -643,6 +659,31 @@ def require_config(key: str) -> str:
 			f"site config missing {key!r}. Set with: bench --site <site> set-config -p {key} <value>"
 		)
 	return value
+
+
+def _resolve_fleet_public_key() -> str | None:
+	"""The OpenSSH public key for `Atlas Settings.ssh_public_key`.
+
+	Prefer an explicit `atlas_ssh_public_key`; otherwise DERIVE it from the private
+	key at `atlas_ssh_private_key_path` (ssh-keygen -y). This field is load-bearing
+	for self-serve: `Site._provision_backing_vm` clones the golden snapshot with
+	`ssh_public_key=<this>`, and a blank value makes the clone's VM insert throw
+	`MandatoryError: ssh_public_key` — so a self-serve bootstrap that only sets the
+	private key path (the common case) would otherwise fail the first signup. Returns
+	None only if neither the config key nor a readable private key is present."""
+	configured = frappe.conf.get("atlas_ssh_public_key")
+	if configured:
+		return configured
+	key_path = frappe.conf.get("atlas_ssh_private_key_path")
+	if not key_path:
+		return None
+	expanded = os.path.expanduser(key_path)
+	if not os.path.isfile(expanded):
+		return None
+	import subprocess
+
+	result = subprocess.run(["ssh-keygen", "-y", "-f", expanded], capture_output=True, text=True)
+	return result.stdout.strip() if result.returncode == 0 else None
 
 
 def load_key(value: str) -> str:

@@ -64,7 +64,6 @@ def prepare_lv(origin: LogicalVolume, target: LogicalVolume, disk_gigabytes: int
 	# Grow to the VM's size if larger than the origin. -r resizes the fs in the
 	# same shot; a no-op when sizes already match, so guard on it failing-clean.
 	run("sudo", "lvextend", "-r", "-L", f"{disk_gigabytes}G", device, check=False, quiet=True)
-	run("sudo", "e2fsck", "-fy", device, check=False, quiet=True)
 	run("sudo", "tune2fs", "-U", "random", "-L", "atlas-root", device)
 	return target
 
@@ -218,15 +217,26 @@ def _has_host_keys(mount_point: str) -> bool:
 
 
 def _regenerate_host_keys(mount_point: str, hostname: str) -> None:
+	# The CI rootfs has no first-boot keygen, so sshd dies without keys; generate
+	# per-VM keys here. On a snapshot/clone source this also overwrites the source
+	# VM's keys so the new VM is not a duplicate.
+	#
+	# Only generate ed25519: it's the fastest to create (~0.03s vs ~0.9s for RSA)
+	# and every modern client negotiates it first. We still delete any inherited
+	# rsa/ecdsa keys (a snapshot source may carry them) so the clone never reuses
+	# the source's identity by silently keeping its old keys.
+
 	# Replace the rootfs's SSH host keys with fresh per-VM ones. Used to establish
 	# identity at provision (the base image ships SHARED baked keys that must not
 	# be reused across VMs) and to rotate it on demand. NOT called on a plain
 	# rebuild/restore — those preserve the disk's keys (see _ensure_host_keys).
 	install_directory(f"{mount_point}/etc/ssh", mode="0755")
-	for key_type in ("rsa", "ecdsa", "ed25519"):
-		key_path = f"{mount_point}/etc/ssh/ssh_host_{key_type}_key"
-		run("sudo", "rm", "-f", key_path, f"{key_path}.pub")
-		run("sudo", "ssh-keygen", "-q", "-t", key_type, "-f", key_path, "-N", "", "-C", f"root@{hostname}")
+	for stale in ("rsa", "ecdsa"):
+		stale_path = f"{mount_point}/etc/ssh/ssh_host_{stale}_key"
+		run("sudo", "rm", "-f", stale_path, f"{stale_path}.pub")
+	key_path = f"{mount_point}/etc/ssh/ssh_host_ed25519_key"
+	run("sudo", "rm", "-f", key_path, f"{key_path}.pub")
+	run("sudo", "ssh-keygen", "-q", "-t", "ed25519", "-f", key_path, "-N", "", "-C", f"root@{hostname}")
 
 
 def _write_machine_id(mount_point: str, machine_id: str) -> None:

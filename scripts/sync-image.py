@@ -280,9 +280,29 @@ def _normalize_rootfs(root: str) -> None:
 
 def _build_ext4(root: str, rootfs_path: str, disk_gb: int) -> None:
 	# 4. Build the ext4. Label `atlas-root` matches /etc/fstab.
+	#
+	# metadata_csum_seed decouples the per-block checksum seed from the
+	# filesystem UUID. Without it, `tune2fs -U random` (run per-VM in
+	# prepare_lv to give each clone a distinct UUID) must rewrite every
+	# metadata block's checksum; on a CoW thin snapshot each such write forces
+	# a pool copy, costing ~1.7s per provision. With the seed baked into the
+	# base image, the UUID change is a single superblock write (~9ms) on every
+	# snapshot. Measured 185x: 1.673s -> 0.009s.
 	run("sudo", "chown", "-R", "root:root", root)
 	run("sudo", "truncate", "-s", f"{disk_gb}G", f"{rootfs_path}.part")
-	run("sudo", "mkfs.ext4", "-q", "-L", "atlas-root", "-d", root, "-F", f"{rootfs_path}.part")
+	run(
+		"sudo",
+		"mkfs.ext4",
+		"-q",
+		"-O",
+		"metadata_csum_seed",
+		"-L",
+		"atlas-root",
+		"-d",
+		root,
+		"-F",
+		f"{rootfs_path}.part",
+	)
 	run("sudo", "mv", f"{rootfs_path}.part", rootfs_path)
 
 
