@@ -368,6 +368,7 @@ def _check_virtual_machine_buttons(server_name: str, image_name: str, public_key
 	assert vm.status == "Running", vm.status
 
 	_check_pause_resume_buttons(vm)
+	_check_warm_snapshot_button(vm)
 	_check_snapshot_family_buttons(vm)
 
 	# Terminate (from Stopped, where the snapshot-family checks leave it).
@@ -400,6 +401,39 @@ def _check_pause_resume_buttons(vm) -> None:
 	_call_button("Virtual Machine", vm.name, "resume")
 	vm.reload()
 	assert vm.status == "Running", vm.status
+
+
+def _check_warm_snapshot_button(vm) -> None:
+	"""The "Warm snapshot" button (Running/Paused). Captures the live guest's
+	memory + disk at one paused instant into a kind=Warm row WITHOUT stopping,
+	then deletes it (cascading the on-host LV + memory-dir cleanup). Title posts
+	as a Data string from the prompt, the shape the desk sends. Enters Running;
+	leaves the VM Running."""
+	assert vm.status == "Running", vm.status
+	snapshot_name = _call_button("Virtual Machine", vm.name, "capture_warm_snapshot", title="desk warm")
+	assert snapshot_name, "capture_warm_snapshot returned no name"
+	snapshot = frappe.get_doc("Virtual Machine Snapshot", snapshot_name)
+	assert snapshot.kind == "Warm", snapshot.kind
+	assert snapshot.status == "Available", snapshot.status
+	assert snapshot.memory_directory and snapshot.memory_bytes, (
+		snapshot.memory_directory,
+		snapshot.memory_bytes,
+	)
+	# The capture resumed the guest — no stop.
+	vm.reload()
+	assert vm.status == "Running", vm.status
+
+	# Rejected on a Stopped VM (no live guest to freeze). Stop, check, restart.
+	_call_button("Virtual Machine", vm.name, "stop")
+	with expect_validation_error("running or paused vm"):
+		_call_button("Virtual Machine", vm.name, "capture_warm_snapshot", title="too cold")
+	_call_button("Virtual Machine", vm.name, "start")
+	vm.reload()
+	assert vm.status == "Running", vm.status
+
+	# Delete the warm row — on_trash removes the snapshot LV and the memory dir.
+	frappe.delete_doc("Virtual Machine Snapshot", snapshot_name, ignore_permissions=True)
+	assert not frappe.db.exists("Virtual Machine Snapshot", snapshot_name)
 
 
 def _check_snapshot_family_buttons(vm) -> None:

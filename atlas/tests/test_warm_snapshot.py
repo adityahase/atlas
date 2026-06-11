@@ -381,6 +381,91 @@ class TestWarmClone(IntegrationTestCase):
 		self.assertEqual(clone.cpu_max_cores, 0.25)  # the tier's cgroup cap still applies
 
 
+class TestWarmSnapshotAction(IntegrationTestCase):
+	"""The per-VM `capture_warm_snapshot()` operator action — the capture half of the
+	Image Builder's warm bake exposed on a live VM. Mocks the host Task and pins
+	the row it produces (kind=Warm, captured config, folded to Available) and the
+	capture variables, the same contract `image_build._warm_snapshot` relies on."""
+
+	# A real ATLAS_RESULT line so the controller's own parse_result runs.
+	RESULT_STDOUT = (
+		'ATLAS_RESULT={"size_bytes": 12884901888, "memory_bytes": 2147483648, '
+		'"host_signature": "{\\"kernel\\": \\"6.1\\"}"}'
+	)
+
+	def setUp(self) -> None:
+		self.server = _ensure_server()
+		self.image = make_image("warm-test-image").name
+		for name in frappe.get_all("Virtual Machine", pluck="name"):
+			frappe.delete_doc("Virtual Machine", name, force=1, ignore_permissions=True)
+
+	def _running_vm(self) -> "frappe.model.document.Document":
+		vm = frappe.get_doc(
+			{
+				"doctype": "Virtual Machine",
+				"title": "live vm",
+				"server": self.server,
+				"image": self.image,
+				"vcpus": 2,
+				"memory_megabytes": 2048,
+				"disk_gigabytes": 12,
+				"ssh_public_key": "k",
+			}
+		).insert(ignore_permissions=True)
+		vm.db_set("status", "Running")
+		vm.reload()
+		return vm
+
+	def test_capture_creates_warm_row_with_captured_config(self) -> None:
+		vm = self._running_vm()
+		with patch(
+			"atlas.atlas.doctype.virtual_machine.virtual_machine.run_task",
+			return_value=fake_task(stdout=self.RESULT_STDOUT),
+		) as mocked:
+			snapshot_name = vm.capture_warm_snapshot(title="hot")
+		snapshot = frappe.get_doc("Virtual Machine Snapshot", snapshot_name)
+		self.assertEqual(snapshot.kind, "Warm")
+		self.assertEqual(snapshot.status, "Available")
+		self.assertEqual(snapshot.virtual_machine, vm.name)
+		self.assertEqual(snapshot.source_image, self.image)
+		# Captured machine config + tap — the vmstate pins all three.
+		self.assertEqual(snapshot.vcpus, 2)
+		self.assertEqual(snapshot.memory_megabytes, 2048)
+		self.assertEqual(snapshot.disk_gigabytes, 12)
+		self.assertEqual(snapshot.tap_device, vm.tap_device)
+		# Result folded back from the (mocked) host Task.
+		self.assertEqual(snapshot.size_bytes, 12884901888)
+		self.assertEqual(snapshot.memory_bytes, 2147483648)
+		self.assertEqual(snapshot.rootfs_path, f"/dev/atlas/atlas-snap-{snapshot_name}")
+		self.assertEqual(snapshot.memory_directory, f"/var/lib/atlas/snapshots/{snapshot_name}")
+		# The capture ran warm-snapshot-vm.py with the durable artifact targets.
+		self.assertEqual(mocked.call_args.kwargs["script"], "warm-snapshot-vm.py")
+		variables = mocked.call_args.kwargs["variables"]
+		self.assertEqual(variables["VIRTUAL_MACHINE_NAME"], vm.name)
+		self.assertEqual(variables["SNAPSHOT_ROOTFS_PATH"], snapshot.rootfs_path)
+		self.assertEqual(variables["MEMORY_DIRECTORY"], snapshot.memory_directory)
+		self.assertIn("ATLAS_FC_UID", variables)
+
+	def test_capture_allowed_on_paused_vm(self) -> None:
+		vm = self._running_vm()
+		vm.db_set("status", "Paused")
+		vm.reload()
+		with patch(
+			"atlas.atlas.doctype.virtual_machine.virtual_machine.run_task",
+			return_value=fake_task(stdout=self.RESULT_STDOUT),
+		):
+			self.assertTrue(vm.capture_warm_snapshot())
+
+	def test_capture_rejected_on_stopped_vm(self) -> None:
+		vm = self._running_vm()
+		vm.db_set("status", "Stopped")
+		vm.reload()
+		with self.assertRaises(frappe.ValidationError):
+			vm.capture_warm_snapshot()
+		# No half-built row left behind by the rejected capture.
+		self.assertFalse(frappe.get_all("Virtual Machine Snapshot", filters={"virtual_machine": vm.name}))
+
+
 class TestWarmImageBuild(IntegrationTestCase):
 	def test_warm_rejected_for_recipes_without_entrypoint(self) -> None:
 		server = _ensure_server()
