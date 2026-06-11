@@ -142,6 +142,12 @@ class VirtualMachine(Document):
 
 	@frappe.whitelist()
 	def start(self) -> str:
+		"""Start a Stopped VM. When the last stop captured a memory snapshot
+		(has_memory_snapshot), the host resumes the guest from it in milliseconds
+		instead of cold-booting; the start Task is the same either way — the
+		launcher and the unit's vm-restore.py hook decide from the on-host marker.
+		The snapshot is consumed by the start (restored or not), so the flag
+		clears here unconditionally."""
 		if self.status != "Stopped":
 			frappe.throw(f"Cannot start from {self.status}")
 		task = run_task(
@@ -152,37 +158,72 @@ class VirtualMachine(Document):
 			timeout_seconds=30,
 		)
 		self.status = "Running"
+		self.has_memory_snapshot = 0
 		self.last_started = frappe.utils.now_datetime()
 		self.save()
 		return task.name
 
 	@frappe.whitelist()
-	def stop(self) -> str:
+	def stop(self, memory_snapshot: bool | None = None) -> str:
+		"""Stop a Running/Paused VM. With `memory_snapshot` (default: the VM's
+		memory_snapshot_on_stop flag), the stop Task first captures the guest's
+		full memory state so the next Start resumes it in milliseconds; on any
+		snapshot failure the Task falls back to the plain stop on its own — the
+		VM always ends up Stopped, only the next Start's speed differs.
+		has_memory_snapshot records which way it went."""
 		# A Paused VM's unit is still active (vCPUs frozen, not shut down), so
 		# `systemctl stop` is the correct full shutdown from either state.
 		if self.status not in ("Running", "Paused"):
 			frappe.throw(f"Cannot stop from {self.status}")
 		if self.stop_protection:
 			frappe.throw("Disable stop protection before stopping this VM")
-		task = run_task(
-			server=self.server,
-			script="stop-vm.py",
-			variables={"VIRTUAL_MACHINE_NAME": self.name},
-			virtual_machine=self.name,
-			timeout_seconds=30,
-		)
+		if memory_snapshot is None:
+			memory_snapshot = bool(self.memory_snapshot_on_stop)
+		# frm.call / REST send a JSON/stringy value; normalize to bool.
+		memory_snapshot = memory_snapshot in (True, 1, "1", "true", "True", "yes")
+		snapshotted = False
+		if memory_snapshot:
+			# The memory dump is RAM-sized; give it disk-write time, not the
+			# 30s a plain systemctl stop needs.
+			task = run_task(
+				server=self.server,
+				script="snapshot-stop-vm.py",
+				variables={
+					"VIRTUAL_MACHINE_NAME": self.name,
+					"ATLAS_FC_UID": str(derive_uid(self.name)),
+				},
+				virtual_machine=self.name,
+				timeout_seconds=120,
+			)
+			snapshotted = bool(parse_result(task.stdout)["memory_snapshot"])
+		else:
+			task = run_task(
+				server=self.server,
+				script="stop-vm.py",
+				variables={"VIRTUAL_MACHINE_NAME": self.name},
+				virtual_machine=self.name,
+				timeout_seconds=30,
+			)
 		self.status = "Stopped"
+		self.has_memory_snapshot = 1 if snapshotted else 0
 		self.last_stopped = frappe.utils.now_datetime()
 		self.save()
 		return task.name
 
 	@frappe.whitelist()
-	def restart(self) -> dict:
+	def restart(self, cold: bool = False) -> dict:
 		"""Stop (if Running) then Start. Two Tasks. A Paused VM must resume or
-		stop first — restart is deliberately Running/Stopped only."""
+		stop first — restart is deliberately Running/Stopped only.
+
+		With memory_snapshot_on_stop set (the default), a restart is a
+		state-preserving POWER CYCLE: the stop captures the guest's memory and
+		the start resumes it — milliseconds, but the guest never reboots, so a
+		wedged guest stays wedged. Pass `cold=True` for a true reboot (plain
+		stop, full cold boot)."""
 		if self.status not in ("Running", "Stopped"):
 			frappe.throw(f"Cannot restart from {self.status}")
-		stop_task = self.stop() if self.status == "Running" else None
+		cold = cold in (True, 1, "1", "true", "True", "yes")
+		stop_task = self.stop(memory_snapshot=False if cold else None) if self.status == "Running" else None
 		start_task = self.start()
 		return {"stop_task": stop_task, "start_task": start_task}
 
@@ -339,6 +380,9 @@ class VirtualMachine(Document):
 			virtual_machine=self.name,
 			timeout_seconds=300,
 		)
+		# rebuild-vm.py dropped any pending memory snapshot (saved RAM must never
+		# be restored over a replaced disk); mirror that on the row.
+		self.db_set("has_memory_snapshot", 0)
 		return task.name
 
 	def _rebuild_variables(self, source_type: str, source: str | None) -> dict:
@@ -461,6 +505,9 @@ class VirtualMachine(Document):
 		self.memory_megabytes = new_memory
 		self.disk_gigabytes = new_disk
 		self.data_disk_gigabytes = new_data_disk
+		# resize-vm.py dropped any pending memory snapshot (the saved vmstate no
+		# longer matches the new machine config); mirror that on the row.
+		self.has_memory_snapshot = 0
 		self.flags.resizing = True
 		self.save()
 		return task.name
@@ -497,6 +544,9 @@ class VirtualMachine(Document):
 			virtual_machine=self.name,
 			timeout_seconds=60,
 		)
+		# The script dropped any pending memory snapshot (the rootfs changed
+		# under it); mirror that on the row.
+		self.db_set("has_memory_snapshot", 0)
 		return task.name
 
 	@frappe.whitelist()
