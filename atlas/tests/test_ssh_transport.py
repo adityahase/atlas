@@ -11,6 +11,7 @@ from frappe.tests import IntegrationTestCase
 
 from atlas.atlas._ssh import transport
 from atlas.atlas._ssh.transport import (
+	PROBE_CONNECT_TIMEOUT_SECONDS,
 	Connection,
 	_ensure_known_hosts_directory,
 	forget_host,
@@ -63,6 +64,53 @@ class TestWaitForSsh(IntegrationTestCase):
 				):
 					with self.assertRaises(frappe.ValidationError):
 						wait_for_ssh(CONNECTION, timeout_seconds=10)
+
+	def test_probe_timeout_is_retried_not_fatal(self) -> None:
+		# A guest still booting isn't listening on :22 yet, so the per-probe ssh
+		# hangs until its own timeout fires -> subprocess.TimeoutExpired. That must
+		# be folded into the poll loop like a non-zero exit, NOT escape and fail the
+		# whole provision on the first probe (the bug that marked a Site Failed ~30s
+		# in, defeating the timeout_seconds budget).
+		responses = [subprocess.TimeoutExpired(cmd="ssh", timeout=30), ("", "", 0)]
+
+		def flaky(*args, **kwargs):
+			outcome = responses.pop(0)
+			if isinstance(outcome, Exception):
+				raise outcome
+			return outcome
+
+		with patch("atlas.atlas._ssh.transport.run_ssh", side_effect=flaky):
+			with patch("atlas.atlas._ssh.transport.time.sleep"):
+				wait_for_ssh(CONNECTION, timeout_seconds=10)
+		self.assertEqual(responses, [])
+
+	def test_persistent_probe_timeout_raises_validation_not_raw_timeout(self) -> None:
+		# If the guest never comes up, the per-probe timeouts must still surface as
+		# the wait's own ValidationError at the deadline — never a raw TimeoutExpired
+		# leaking out on the first probe.
+		with patch(
+			"atlas.atlas._ssh.transport.run_ssh",
+			side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=30),
+		):
+			with patch("atlas.atlas._ssh.transport.time.sleep"):
+				with patch(
+					"atlas.atlas._ssh.transport.time.monotonic",
+					side_effect=[0.0, 1.0, 9999.0],
+				):
+					with self.assertRaises(frappe.ValidationError):
+						wait_for_ssh(CONNECTION, timeout_seconds=10)
+
+	def test_probe_overrides_connect_timeout_to_90s(self) -> None:
+		# This step gets a longer ConnectTimeout than the shared 30s default so a
+		# slow-booting guest gets a longer single connect attempt. The override must
+		# reach run_ssh, and the subprocess timeout must be >= it so it can't kill
+		# ssh before its own connect attempt finishes.
+		with patch("atlas.atlas._ssh.transport.run_ssh", return_value=("", "", 0)) as run_ssh:
+			with patch("atlas.atlas._ssh.transport.time.sleep"):
+				wait_for_ssh(CONNECTION, timeout_seconds=10)
+		_, kwargs = run_ssh.call_args
+		self.assertEqual(kwargs["extra_options"], [f"ConnectTimeout={PROBE_CONNECT_TIMEOUT_SECONDS}"])
+		self.assertGreaterEqual(kwargs["timeout_seconds"], PROBE_CONNECT_TIMEOUT_SECONDS)
 
 
 class TestRunDetached(IntegrationTestCase):
@@ -201,6 +249,43 @@ class TestEnsuresKnownHostsBeforeConnecting(IntegrationTestCase):
 			with patch("atlas.atlas._ssh.transport.subprocess.run", side_effect=_ok):
 				run_scp(CONNECTION, "/tmp/key", "/local/a", "/remote/a", timeout_seconds=30)
 		ensure.assert_called_once()
+
+
+class TestRunSsh(IntegrationTestCase):
+	def test_extra_options_append_after_defaults_so_a_duplicate_wins(self) -> None:
+		# ssh honours the LAST occurrence of a repeated -o, so an override must come
+		# after the shared SSH_OPTIONS (which already carries ConnectTimeout=30).
+		captured = {}
+
+		def capture(args, **kwargs):
+			captured["args"] = list(args)
+			return _ok(args, **kwargs)
+
+		with patch("atlas.atlas._ssh.transport.subprocess.run", side_effect=capture):
+			run_ssh(CONNECTION, "/tmp/key", "true", timeout_seconds=90, extra_options=["ConnectTimeout=90"])
+
+		args = captured["args"]
+		default = args.index("ConnectTimeout=30")
+		override = args.index("ConnectTimeout=90")
+		self.assertLess(default, override)  # the 90s override is last → it wins
+		# The override is a proper `-o key=value` pair, and the remote command is
+		# still the final arg (override slotted before host/command, not after).
+		self.assertEqual(args[override - 1], "-o")
+		self.assertEqual(args[-1], "true")
+
+	def test_no_extra_options_leaves_argv_at_defaults(self) -> None:
+		captured = {}
+
+		def capture(args, **kwargs):
+			captured["args"] = list(args)
+			return _ok(args, **kwargs)
+
+		with patch("atlas.atlas._ssh.transport.subprocess.run", side_effect=capture):
+			run_ssh(CONNECTION, "/tmp/key", "true", timeout_seconds=30)
+
+		# Only the default ConnectTimeout=30 is present; no override leaked in.
+		self.assertEqual(captured["args"].count("ConnectTimeout=30"), 1)
+		self.assertNotIn("ConnectTimeout=90", captured["args"])
 
 
 class TestRunScp(IntegrationTestCase):

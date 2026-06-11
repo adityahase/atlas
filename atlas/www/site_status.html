@@ -204,9 +204,10 @@ frappe.ready(() => {
     if (isTerminal(payload.status)) done = true;
   });
 
-  // Fallback: poll on a slow interval so the view self-heals if a socket event
-  // was dropped or the socket never connected. Realtime carries the fast path;
-  // this only guarantees eventual correctness. Stops once terminal.
+  // Poll once a second so the steps (and the in-flight phase's live timer) tick
+  // every second, and the view self-heals if a socket event was dropped or the
+  // socket never connected. Realtime still carries the instant fast path; this
+  // guarantees a fresh payload every second regardless. Stops once terminal.
   const poll = setInterval(() => {
     if (done) {
       clearInterval(poll);
@@ -225,7 +226,7 @@ frappe.ready(() => {
         if (isTerminal(payload.status)) done = true;
       }
     }).catch(() => {});
-  }, 5000);
+  }, 1000);
 });
 </script>
 

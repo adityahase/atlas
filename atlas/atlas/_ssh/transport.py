@@ -65,6 +65,14 @@ SSH_OPTIONS = [
 ]
 
 
+# Per-probe ConnectTimeout for wait_for_ssh's readiness poll. The shared
+# SSH_OPTIONS default (30s) is right for established hosts, but a guest still
+# booting off the golden snapshot can take longer to start answering on :22; a
+# longer single connect attempt avoids declaring it not-ready prematurely. Scoped
+# to this step only via run_ssh(extra_options=...), so other SSH calls keep 30s.
+PROBE_CONNECT_TIMEOUT_SECONDS = 90
+
+
 @dataclasses.dataclass(frozen=True)
 class Connection:
 	host: str
@@ -82,14 +90,37 @@ def _bracket_host(host: str) -> str:
 
 
 def wait_for_ssh(connection: Connection, timeout_seconds: int = 300, poll_seconds: int = 5) -> None:
-	"""Poll the host until SSH accepts a `true` command, or raise."""
+	"""Poll the host until SSH accepts a `true` command, or raise.
+
+	A freshly-booted guest (a clone off the golden snapshot) often isn't serving
+	sshd yet when the first probe fires. That shows up two ways, BOTH of which mean
+	"not ready, keep polling" — not "fail the whole provision":
+	  - sshd is up but rejecting (or the host key dance fails) -> non-zero exit code;
+	  - sshd isn't listening yet, so the TCP connect hangs until the per-probe ssh
+	    timeout fires -> subprocess.TimeoutExpired.
+	The second case is the subtle one: the connect hangs for the whole ConnectTimeout
+	before raising. We override ConnectTimeout to 90s for THIS probe (the shared
+	default is 30s) so a slow-booting guest gets a longer single attempt rather than
+	being declared not-ready prematurely; the per-probe subprocess timeout is raised
+	to match so it doesn't kill ssh before its own connect attempt finishes. Either
+	signal is retried until the real `deadline`, then raised."""
 	_ensure_known_hosts_directory()
 	forget_host(connection.host)
 	deadline = time.monotonic() + timeout_seconds
 	with ssh_key_file(connection.ssh_private_key) as key_path:
 		while True:
-			_, _, exit_code = run_ssh(connection, key_path, "true", timeout_seconds=30)
-			if exit_code == 0:
+			try:
+				_, _, exit_code = run_ssh(
+					connection,
+					key_path,
+					"true",
+					timeout_seconds=PROBE_CONNECT_TIMEOUT_SECONDS,
+					extra_options=[f"ConnectTimeout={PROBE_CONNECT_TIMEOUT_SECONDS}"],
+				)
+				ready = exit_code == 0
+			except subprocess.TimeoutExpired:
+				ready = False
+			if ready:
 				return
 			if time.monotonic() >= deadline:
 				raise frappe.ValidationError(f"SSH to {connection.host} not ready after {timeout_seconds}s")
@@ -122,21 +153,31 @@ def run_ssh(
 	remote_command: str,
 	timeout_seconds: int,
 	stdin: str | None = None,
+	extra_options: list[str] | None = None,
 ) -> tuple[str, str, int]:
 	"""Run one remote command over SSH. `stdin`, if given, is piped to the remote
 	command's stdin — the path the proxy control plane uses to stream a map body
 	to a guest's `curl --unix-socket … --data-binary @-` (design §7.3), without
-	first staging a file on the guest."""
+	first staging a file on the guest.
+
+	`extra_options` are appended after SSH_OPTIONS as additional `-o key=value`
+	flags. ssh honours the LAST occurrence of a repeated option, so a caller can
+	override a default (e.g. ConnectTimeout) for one step without mutating the
+	shared SSH_OPTIONS."""
 	# StrictHostKeyChecking=accept-new must WRITE the new host key into
 	# ~/.atlas/known_hosts, so the parent dir has to exist — ensure it here so no
 	# caller can forget (cheap + idempotent; the guest control plane in proxy.py
 	# SSHes without going through the runner that used to do this).
 	_ensure_known_hosts_directory()
+	override_options: list[str] = []
+	for option in extra_options or []:
+		override_options += ["-o", option]
 	args = [
 		"ssh",
 		"-i",
 		key_path,
 		*SSH_OPTIONS,
+		*override_options,
 		f"{connection.user}@{connection.host}",
 		remote_command,
 	]
