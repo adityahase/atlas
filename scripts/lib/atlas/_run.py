@@ -11,9 +11,11 @@ Patterned on references/agent/agent/base.py::execute — a subprocess wrapper th
 streams output and raises on non-zero — reduced to the slice Atlas needs.
 """
 
+import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -94,10 +96,24 @@ def run_input(*argv: str, stdin: str) -> str:
 
 def install_file(content: str, dest: str, *, mode: str = "0644", sudo: bool = True) -> None:
 	"""Write `content` to `dest` with `mode`, atomically, via `install -m <mode>
-	/dev/stdin <dest>` — the exact idiom the heredocs used (preserves the
-	install(1) semantics: create-or-replace with the mode set in one shot)."""
-	argv = (["sudo"] if sudo else []) + ["install", "-m", mode, "/dev/stdin", dest]
-	run_input(*argv, stdin=content)
+	<src> <dest>` — preserves the install(1) semantics the heredocs relied on
+	(create-or-replace with the mode set in one shot).
+
+	`src` is a real temp file, NOT `/dev/stdin`. uutils (rust-coreutils) `install`
+	— the default on Ubuntu 26.04 — cannot reliably copy from a non-seekable pipe
+	source: feeding content as the child's stdin and passing `/dev/stdin` fails
+	~90% of the time (proven 29/30 on a Self-Managed host) with `install: No such
+	file or directory`, while the SAME pipe reads fine via cat. GNU install tolerates
+	it; uutils does not. The flakiness silently broke bootstrap and sync-image. A
+	spooled regular file is seekable, so install copies it 30/30."""
+	with tempfile.NamedTemporaryFile("w", prefix="atlas-install-", delete=False) as spool:
+		spool.write(content)
+		src = spool.name
+	try:
+		argv = (["sudo"] if sudo else []) + ["install", "-m", mode, src, dest]
+		run(*argv)
+	finally:
+		os.unlink(src)
 
 
 def install_directory(dest: str, *, mode: str = "0700", sudo: bool = True) -> None:
