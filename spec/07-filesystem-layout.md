@@ -134,9 +134,18 @@ has none). The base image is itself a read-only thin LV imported at sync.
   [`atlas.lvm`](../scripts/lib/atlas/lvm.py) module (`ThinPool` / `LogicalVolume`),
   which derive every name from the UUID — the single place the scheme lives.
 
-The PV under the pool is a sparse loopback file (`pool/atlas-pool.img`) on a
-stock droplet's root disk — a real attached block device is the spec/09
-follow-on. See [spec/08](./08-images.md) for the base-LV import and
+The PV under the pool depends on the host. On a stock droplet (one disk,
+partitioned + mounted as root) there is no spare device, so the PV is a sparse
+loopback file (`pool/atlas-pool.img`) on the root disk. On a bare-metal box with
+real NVMe (Scaleway Elastic Metal — the OS lives on one disk, the NVMe drives are
+free) the PV is **the NVMe device(s) themselves**, and the pool spans them with
+no loopback indirection. `ThinPool`'s `PoolBacking` picks the backing: it honours
+an explicit `ATLAS_POOL_DEVICE`, else probes `lsblk` for raw, unpartitioned,
+unmounted whole disks (`discover_pool_disks`), else falls back to the loopback
+file — so the same `bootstrap-server.py` yields a real-device pool on bare metal
+and a loopback pool on a droplet with no per-provider branch. The chosen device
+set is recorded in `pool/pool-devices` so a reboot re-asserts the same backing.
+See [spec/08](./08-images.md) for the base-LV import and
 [spec/05](./05-virtual-machine-lifecycle.md) for clone/snapshot/resize/terminate
 mechanics.
 
@@ -164,13 +173,15 @@ iteration.
 
 ## Surviving a host reboot
 
-The pool's backing file persists across a reboot, but two pieces of state do
-not, and both are reconstructed from on-disk state — never from the Frappe DB:
+The pool's backing persists across a reboot, but two pieces of state do not, and
+both are reconstructed from on-disk state — never from the Frappe DB:
 
-- **The pool.** The loop binding and the VG/pool activation are gone after a
-  reboot. `atlas-pool.service` (a oneshot, ordered `Before=firecracker-vm@.service`)
-  re-runs `atlas_pool_ensure`, which re-attaches the loop device and activates
-  the VG with `vgchange -ay -K`. The `-K` is load-bearing: per-VM disks are
+- **The pool.** The VG/pool activation is gone after a reboot, and a loopback PV
+  also loses its loop binding (a real-device PV does not). `atlas-pool.service` (a
+  oneshot, ordered `Before=firecracker-vm@.service`) re-runs `ThinPool.ensure()`,
+  whose `PoolBacking.reassert()` re-attaches the loop device **only when the
+  backing is the file** (reading `pool/pool-devices` to tell the two apart), then
+  activates the VG with `vgchange -ay -K`. The `-K` is load-bearing: per-VM disks are
   `lvcreate -s` thin snapshots and carry the LVM **activation-skip** flag, so a
   bare `vgchange -ay` would leave every VM disk inactive. The function is also
   idempotent against LVM's *own* event-based autoactivation, which can surface

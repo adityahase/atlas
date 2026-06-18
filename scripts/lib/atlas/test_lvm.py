@@ -9,17 +9,22 @@ that replaces the env-soup and SIZE_BYTES= grepping.
 
 import contextlib
 import io
+import json
+import os
 import typing
 import unittest
 from dataclasses import dataclass
+from unittest import mock
 
 from atlas._task import TaskInputs, TaskResult
 from atlas.lvm import (
 	DeviceNumber,
 	LogicalVolume,
+	PoolBacking,
 	PoolUsage,
 	ProtectedVolumeError,
 	ThinPool,
+	discover_pool_disks,
 )
 
 UUID = "d4f7c1a2-0000-0000-0000-000000000000"
@@ -112,6 +117,123 @@ class TestProtection(unittest.TestCase):
 	def test_remove_refuses_protected_before_any_host_call(self):
 		with self.assertRaises(ProtectedVolumeError):
 			self.pool.base_image("ubuntu-24").remove()
+
+
+# --- PV backing selection: real NVMe device(s) vs the loopback fallback ---
+
+
+def _lsblk(*devices) -> str:
+	"""Build `lsblk -J` fixture JSON from (name, type, fstype, mountpoint,
+	children?) tuples — the shape discover_pool_disks parses."""
+	nodes = []
+	for name, dtype, fstype, mountpoint, *rest in devices:
+		node = {"name": name, "type": dtype, "fstype": fstype, "mountpoint": mountpoint}
+		if rest and rest[0]:
+			node["children"] = rest[0]
+		nodes.append(node)
+	return json.dumps({"blockdevices": nodes})
+
+
+class TestDiscoverPoolDisks(unittest.TestCase):
+	def test_two_blank_nvme_disks_are_picked(self):
+		# A Scaleway Elastic Metal box: OS on sda (partitioned + mounted), two
+		# raw NVMe drives free. Only the NVMe pair backs the pool.
+		out = _lsblk(
+			("sda", "disk", None, None, [{"name": "sda1", "type": "part", "mountpoint": "/"}]),
+			("nvme0n1", "disk", None, None),
+			("nvme1n1", "disk", None, None),
+		)
+		self.assertEqual(discover_pool_disks(out), ["/dev/nvme0n1", "/dev/nvme1n1"])
+
+	def test_result_is_sorted_stably(self):
+		out = _lsblk(("nvme1n1", "disk", None, None), ("nvme0n1", "disk", None, None))
+		self.assertEqual(discover_pool_disks(out), ["/dev/nvme0n1", "/dev/nvme1n1"])
+
+	def test_partitioned_disk_is_skipped(self):
+		out = _lsblk(("sda", "disk", None, None, [{"name": "sda1", "type": "part"}]))
+		self.assertEqual(discover_pool_disks(out), [])
+
+	def test_formatted_whole_disk_is_skipped(self):
+		# A disk carrying a filesystem directly (no partition table) is in use.
+		out = _lsblk(("vdb", "disk", "ext4", None))
+		self.assertEqual(discover_pool_disks(out), [])
+
+	def test_mounted_whole_disk_is_skipped(self):
+		out = _lsblk(("vdb", "disk", None, "/data"))
+		self.assertEqual(discover_pool_disks(out), [])
+
+	def test_loop_and_dm_nodes_are_skipped(self):
+		out = _lsblk(("loop0", "loop", None, None), ("dm-0", "lvm", None, None))
+		self.assertEqual(discover_pool_disks(out), [])
+
+	def test_stock_droplet_has_no_spare_disk(self):
+		# Single partitioned+mounted disk → loopback fallback (empty list).
+		out = _lsblk(("vda", "disk", None, None, [{"name": "vda1", "type": "part", "mountpoint": "/"}]))
+		self.assertEqual(discover_pool_disks(out), [])
+
+	def test_empty_input_is_empty(self):
+		self.assertEqual(discover_pool_disks(""), [])
+		self.assertEqual(discover_pool_disks('{"blockdevices": []}'), [])
+
+
+class TestPoolBackingSelection(unittest.TestCase):
+	"""select_devices() applies env → persisted → discovered → loopback, without
+	touching the host beyond the calls we mock here."""
+
+	def setUp(self):
+		self.backing = PoolBacking("/var/lib/atlas/pool", "200G")
+
+	def test_explicit_env_wins_and_splits(self):
+		with mock.patch.dict(os.environ, {"ATLAS_POOL_DEVICE": "/dev/nvme0n1, /dev/nvme1n1"}):
+			self.assertEqual(self.backing.select_devices(), ["/dev/nvme0n1", "/dev/nvme1n1"])
+
+	def test_persisted_used_when_no_env(self):
+		with (
+			mock.patch.dict(os.environ, {}, clear=False),
+			mock.patch.object(self.backing, "_persisted_devices", return_value=["/dev/nvme0n1"]),
+		):
+			os.environ.pop("ATLAS_POOL_DEVICE", None)
+			self.assertEqual(self.backing.select_devices(), ["/dev/nvme0n1"])
+
+	def test_discovers_when_nothing_persisted(self):
+		out = _lsblk(("nvme0n1", "disk", None, None))
+		with (
+			mock.patch.object(self.backing, "_persisted_devices", return_value=[]),
+			mock.patch("atlas.lvm.run", return_value=out) as run,
+		):
+			os.environ.pop("ATLAS_POOL_DEVICE", None)
+			self.assertEqual(self.backing.select_devices(), ["/dev/nvme0n1"])
+			run.assert_called_once()  # the lsblk probe
+
+	def test_empty_discovery_falls_back_to_loopback(self):
+		with (
+			mock.patch.object(self.backing, "_persisted_devices", return_value=[]),
+			mock.patch("atlas.lvm.run", return_value='{"blockdevices": []}'),
+		):
+			os.environ.pop("ATLAS_POOL_DEVICE", None)
+			self.assertEqual(self.backing.select_devices(), [])
+
+	def test_state_and_backing_paths(self):
+		self.assertEqual(self.backing.backing_image, "/var/lib/atlas/pool/atlas-pool.img")
+		self.assertEqual(self.backing.state_file, "/var/lib/atlas/pool/pool-devices")
+
+	def test_register_device_adds_real_disk_to_lvm_devices_file(self):
+		# A bare-metal disk must be registered in LVM's system.devices allowlist or
+		# pvcreate rejects it ("has no path names") — proven on a live Scaleway box.
+		with mock.patch("atlas.lvm.run") as run:
+			self.backing.register_device("/dev/sda")
+		run.assert_called_once()
+		self.assertEqual(run.call_args.args, ("sudo", "lvmdevices", "--adddev", "/dev/sda"))
+		self.assertFalse(run.call_args.kwargs.get("check", True))  # tolerant: || true
+
+	def test_register_device_skips_loopback(self):
+		# The loopback PV is created locally and already allowed; no lvmdevices.
+		with mock.patch("atlas.lvm.run") as run:
+			self.backing.register_device("/dev/loop3")
+		run.assert_not_called()
+
+	def test_thinpool_exposes_backing(self):
+		self.assertIsInstance(ThinPool().backing, PoolBacking)
 
 
 # --- The typed I/O contract that replaces env-soup + SIZE_BYTES= grepping ---

@@ -561,6 +561,6 @@ behavior; they just keep doors open.
   the catalog rows. Controller + client are fully unit-tested offline; the
   **pure-L3 IPv6-to-guest (NDP-proxy, no Virtual MAC)** go/no-go and the
   Flexible-IP inbound-v4 path are proven by the `scaleway_provisioning` e2e on a
-  real EM-A610R-NVME box. (The LVM pool on real NVMe is a separate slice — it
-  still backs on a loopback file.) See
-  [llm/references/scaleway-provider-plan.md](../llm/references/scaleway-provider-plan.md).
+  real EM-A610R-NVME box. The thin pool backs on the real NVMe device(s) on
+  bare metal (see [07-filesystem-layout.md](./07-filesystem-layout.md)), with a
+  loopback fallback for droplets.

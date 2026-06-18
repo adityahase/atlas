@@ -1,8 +1,11 @@
 """LVM thin-pool, object-oriented — the successor to scripts/lib/lvm.sh.
 
 Every per-VM disk is a thin LV that is a CoW snapshot of a read-only base image
-LV; the pool sits on a loopback PV (a sparse backing file on the root fs). The
-two objects here are the only place that knows the pool layout.
+LV; the pool sits on a PV. On a stock cloud droplet with no spare disk the PV is
+a loopback file (a sparse backing file on the root fs); on bare metal with real
+NVMe (Scaleway Elastic Metal) the PV is the NVMe device(s) themselves — the
+backing is chosen by `PoolBacking` (see below). The two objects here are the only
+place that knows the pool layout.
 
 - `LogicalVolume` is one LV. It knows its own name and device path, whether it
   exists, how to activate, snapshot, and remove itself. Naming is derived, never
@@ -20,11 +23,12 @@ isolated in @staticmethods so it is unit-testable with no LVM stack at all.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from dataclasses import dataclass
 
-from atlas._run import run, run_ok
+from atlas._run import install_directory, install_file, run, run_ok
 
 
 @dataclass(frozen=True)
@@ -175,6 +179,153 @@ class LogicalVolume:
 			return False
 
 
+def discover_pool_disks(lsblk_json: str) -> list[str]:
+	"""Pick the whole-disk block devices that may back the pool PV, parsed from
+	`lsblk -J -b -o NAME,TYPE,MOUNTPOINT,FSTYPE,PKNAME` output.
+
+	A device qualifies only if it is a top-level `disk` (not a partition,
+	loop, or device-mapper node) that carries NO partitions, NO filesystem, and
+	NO mountpoint — i.e. a raw, unused disk. That is exactly what a Scaleway
+	Elastic Metal box's spare NVMe drives look like (the OS lives on a separate
+	disk), and exactly what a stock single-disk droplet does NOT have (its only
+	disk is partitioned + mounted as root) — so the same probe yields the NVMe
+	devices on bare metal and the empty list on a droplet, with no per-provider
+	branch. Pure: text in, sorted device-path list out, so it unit-tests with
+	fixture JSON and no host.
+	"""
+	tree = json.loads(lsblk_json) if lsblk_json.strip() else {}
+	disks = []
+	for node in tree.get("blockdevices", []):
+		if node.get("type") != "disk":
+			continue
+		# A disk with children is partitioned; with an fstype it is formatted
+		# whole-disk; with a mountpoint it is in use. Any of those → not ours.
+		if node.get("children"):
+			continue
+		if node.get("fstype") or node.get("mountpoint"):
+			continue
+		disks.append(f"/dev/{node['name']}")
+	return sorted(disks)
+
+
+class PoolBacking:
+	"""Where the thin pool's PV(s) live — the one thing that differs between a
+	stock droplet (no spare disk → a sparse loopback file) and a bare-metal box
+	with real NVMe (the disks themselves). `ThinPool.ensure()` delegates the
+	PV-bring-up and reboot re-assert here so the pool/VG/LV logic stays identical
+	across both. The chosen backing is persisted to a state file at first bring-up
+	so a reboot re-asserts the SAME backing without re-probing (a disk reorder or
+	a freshly-attached blank disk must not silently re-home the pool).
+
+	Selection order (matches the ATLAS_POOL_* env convention):
+	1. `ATLAS_POOL_DEVICE` env — explicit, space/comma-separated device paths
+	   (the operator escape hatch and what bootstrap passes when it knows).
+	2. The persisted state file — a reboot reuses the first-boot choice.
+	3. Auto-detected unused whole disks (NVMe on Elastic Metal) → real-device PV.
+	4. None of the above → the loopback file (the stock-droplet default).
+	"""
+
+	def __init__(self, pool_directory: str, data_size: str):
+		self.pool_directory = pool_directory
+		self.data_size = data_size
+
+	@property
+	def backing_image(self) -> str:
+		"""The sparse loopback backing file used when no real disk is available."""
+		return f"{self.pool_directory}/atlas-pool.img"
+
+	@property
+	def state_file(self) -> str:
+		"""Records the device PVs chosen at first bring-up (one path per line), so
+		the reboot re-assert is deterministic. Absent ⇒ loopback backing."""
+		return f"{self.pool_directory}/pool-devices"
+
+	@staticmethod
+	def _split_devices(value: str) -> list[str]:
+		return [token for token in value.replace(",", " ").split() if token]
+
+	def _persisted_devices(self) -> list[str]:
+		if not run_ok("test", "-f", self.state_file):
+			return []
+		return self._split_devices(run("sudo", "cat", self.state_file))
+
+	def select_devices(self) -> list[str]:
+		"""The device PVs to back the pool, or [] for the loopback file. Applies
+		the selection order above; never returns a device that is gone."""
+		explicit = self._split_devices(os.environ.get("ATLAS_POOL_DEVICE", ""))
+		if explicit:
+			return explicit
+		persisted = self._persisted_devices()
+		if persisted:
+			return persisted
+		return discover_pool_disks(run("lsblk", "-J", "-b", "-o", "NAME,TYPE,MOUNTPOINT,FSTYPE,PKNAME"))
+
+	def _persist_devices(self, devices: list[str]) -> None:
+		install_directory(self.pool_directory, mode="0700")
+		install_file("\n".join(devices) + "\n", self.state_file, mode="0600")
+
+	# --- bring the PV(s) up (creating them on first run); return the PV list ---
+
+	def ensure_devices(self) -> list[str]:
+		"""Bring up the backing PV(s) and return the device paths to feed pvcreate
+		/ vgcreate. For a real-device backing it settles udev so each disk's /dev
+		node + LVM dev cache are ready (a freshly-installed bare-metal box races
+		pvcreate against udev — `pvcreate /dev/sda` then fails exit 5 "Device open
+		8:0 has no path names / device not found"), persists the list on first use,
+		and returns it. For the loopback fallback it creates the sparse file (once),
+		(re-)binds the loop device, and returns the single loop node — so a reboot
+		re-attaches it."""
+		devices = self.select_devices()
+		if devices:
+			self._settle_devices(devices)
+			if not self._persisted_devices():
+				self._persist_devices(devices)
+			return devices
+		return [self._ensure_loop_device()]
+
+	def _settle_devices(self, devices: list[str]) -> None:
+		"""Make sure each backing disk's /dev node exists and LVM's device cache
+		sees it before pvcreate. `udevadm trigger` re-emits the add events a fresh
+		bare-metal boot may not have finished processing; `settle` waits them out.
+		Idempotent and cheap; harmless on a device that is already ready."""
+		run("sudo", "udevadm", "trigger", "--subsystem-match=block", check=False, quiet=True)
+		run("sudo", "udevadm", "settle", check=False, quiet=True)
+
+	def register_device(self, device: str) -> None:
+		"""Register `device` in LVM's devices file so pvcreate/pvs/vgcreate accept
+		it. LVM 2.03+ ships a default-on `system.devices` allowlist (RHEL 9 /
+		Ubuntu 24.04+): a freshly-attached bare-metal disk not in it is rejected
+		with exit 5 `Device open <maj>:<min> has no path names. Cannot use /dev/sda:
+		device not found` — even though the /dev node exists. `lvmdevices --adddev`
+		adds it durably (survives reboot, unlike a per-command `--devicesfile`
+		bypass). No-op for the loopback device (created locally, already allowed)
+		and a no-op `|| true` on older LVM that predates the devices file (the
+		subcommand is absent) or when the device is already registered."""
+		if device.startswith("/dev/loop"):
+			return
+		run("sudo", "lvmdevices", "--adddev", device, check=False)
+
+	def reassert(self) -> None:
+		"""Reboot re-assert of the backing, BEFORE vgchange. A real-device PV
+		survives a reboot intact (nothing to do); a loopback PV loses its loop
+		binding, so re-bind it from the persisted backing file."""
+		if self._persisted_devices():
+			return
+		if run_ok("test", "-f", self.backing_image):
+			if not run("sudo", "losetup", "-j", self.backing_image).strip():
+				run("sudo", "losetup", "--find", self.backing_image)
+
+	def _ensure_loop_device(self) -> str:
+		install_directory(self.pool_directory, mode="0700")
+		if not run_ok("test", "-f", self.backing_image):
+			run("sudo", "truncate", "-s", self.data_size, self.backing_image)
+		bound = run("sudo", "losetup", "-j", self.backing_image).strip()
+		loop_device = bound.split(":", 1)[0] if bound else ""
+		if not loop_device:
+			loop_device = run("sudo", "losetup", "--find", "--show", self.backing_image).strip()
+		return loop_device
+
+
 class ThinPool:
 	"""The atlas VG + thin pool. Mints LVs by role and answers fullness.
 
@@ -193,6 +344,7 @@ class ThinPool:
 		self.pool_directory = pool_directory
 		self.data_size = os.environ.get("ATLAS_POOL_DATA_SIZE", "200G")
 		self.metadata_size = os.environ.get("ATLAS_POOL_METADATA_SIZE", "1G")
+		self.backing = PoolBacking(pool_directory, self.data_size)
 
 	# --- mint LVs by role. Naming is the single place the scheme lives. ---
 
@@ -228,20 +380,22 @@ class ThinPool:
 
 	@property
 	def backing_image(self) -> str:
-		"""The sparse loopback backing file the pool's PV sits on."""
-		return f"{self.pool_directory}/atlas-pool.img"
+		"""The sparse loopback backing file the pool's PV sits on (loopback
+		backing only). Delegated to PoolBacking, kept for callers/tests that
+		reference the path directly."""
+		return self.backing.backing_image
 
 	@property
 	def _pool_lv(self) -> LogicalVolume:
 		return LogicalVolume(self.pool_name, self)
 
 	def ensure(self) -> None:
-		"""Idempotently bring up the thin pool: sparse backing file, loop device,
-		PV/VG, thin pool LV. Re-running is a no-op once the pool exists (re-binds
-		the loop device, which a reboot drops, then re-activates the VG with -K so
-		skip-flagged VM disk snapshots come back). The port of atlas_pool_ensure;
-		the ONLY line that changes for a real attached block device is the
-		loop_device assignment.
+		"""Idempotently bring up the thin pool: PV(s), VG, thin pool LV. Re-running
+		is a no-op once the pool exists — `PoolBacking.reassert()` re-binds the loop
+		device (which a reboot drops; a real-device PV needs nothing), then the VG
+		is re-activated with -K so skip-flagged VM disk snapshots come back. The
+		port of atlas_pool_ensure; the PV bring-up — loopback file vs. real NVMe
+		device(s) — is the one thing that varies, and lives in PoolBacking.
 
 		The double existence-check (top + before lvcreate) guards a reboot race:
 		LVM's own event autoactivation can surface pool0 between the two checks,
@@ -249,24 +403,21 @@ class ThinPool:
 		inner gate a concurrently-activated pool just falls through to vgchange.
 		"""
 		if self._pool_lv.exists:
-			if not run("sudo", "losetup", "-j", self.backing_image).strip():
-				run("sudo", "losetup", "--find", self.backing_image)
+			self.backing.reassert()
 			run("sudo", "vgchange", "-ay", "-K", self.volume_group, quiet=True)
 			return
 
-		run("sudo", "install", "-d", "-m", "0700", self.pool_directory)
-		if not run_ok("test", "-f", self.backing_image):
-			run("sudo", "truncate", "-s", self.data_size, self.backing_image)
+		devices = self.backing.ensure_devices()
 
-		loop_device = run("sudo", "losetup", "-j", self.backing_image).strip()
-		loop_device = loop_device.split(":", 1)[0] if loop_device else ""
-		if not loop_device:
-			loop_device = run("sudo", "losetup", "--find", "--show", self.backing_image).strip()
-
-		if not run_ok("sudo", "pvs", loop_device):
-			run("sudo", "pvcreate", loop_device, quiet=True)
+		for device in devices:
+			self.backing.register_device(device)
+			if not run_ok("sudo", "pvs", device):
+				# --yes: a freshly-installed bare-metal disk may carry a leftover
+				# partition/filesystem signature from the vendor image; accept the
+				# wipe non-interactively rather than let pvcreate stall on a prompt.
+				run("sudo", "pvcreate", "--yes", device, quiet=True)
 		if not run_ok("sudo", "vgs", self.volume_group):
-			run("sudo", "vgcreate", self.volume_group, loop_device, quiet=True)
+			run("sudo", "vgcreate", self.volume_group, *devices, quiet=True)
 
 		if not self._pool_lv.exists:
 			run(

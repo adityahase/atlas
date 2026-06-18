@@ -1,11 +1,14 @@
 [Unit]
 Description=Atlas LVM thin pool
-# The pool lives on a loopback PV (a sparse backing file on the root fs). The
-# backing file survives a reboot, but the loop device binding does not, so the
-# VG/pool are gone until the loop is re-attached. bootstrap-server.sh creates
-# the pool but is NOT re-run on boot, so this oneshot re-asserts it. Ordered
-# before any VM unit (firecracker-vm@.service Wants network-online.target;
-# this only needs local fs) so a VM never starts against a missing pool.
+# The pool's PV is either real NVMe device(s) (Scaleway Elastic Metal) or a
+# loopback PV (a sparse backing file on a stock droplet's root fs). A real-device
+# PV survives a reboot intact; the loopback file survives but its loop binding
+# does not, so the VG/pool are gone until the loop is re-attached. bootstrap-
+# server.py creates the pool but is NOT re-run on boot, so this oneshot re-asserts
+# it (ThinPool.ensure() → PoolBacking.reassert() re-binds the loop only when the
+# backing is the file). Ordered before any VM unit (firecracker-vm@.service Wants
+# network-online.target; this only needs local fs) so a VM never starts against a
+# missing pool.
 After=local-fs.target
 Before=firecracker-vm@.service
 DefaultDependencies=no

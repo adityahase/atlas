@@ -400,15 +400,18 @@ def main() -> None:
 	run("sudo", "systemctl", "daemon-reload")
 
 	# 11a. LVM thin pool for VM disks. Per-VM disks are thin CoW snapshots of a
-	#      read-only base image LV instead of full file copies. The pool sits on a
-	#      loopback PV (a sparse backing file on the root fs) because a stock DO
-	#      droplet has no spare block device; the real-attached-device PV is the
-	#      documented spec/09 follow-on. dm_thin_pool is the kernel target the pool
-	#      runs on; load it now and persist it for reboots. The 60-atlas-blocklist
-	#      (step 6) targets unused fs/net modules only and never touches dm_*, so
-	#      this is unaffected. ThinPool.ensure() (idempotent) does the loop/pv/vg/
-	#      pool work; atlas-pool.service re-asserts the loop binding after a reboot
-	#      since bootstrap is not re-run on boot.
+	#      read-only base image LV instead of full file copies. The pool's PV is
+	#      chosen by ThinPool's PoolBacking: a bare-metal box with spare NVMe
+	#      (Scaleway Elastic Metal) backs it with the real disk(s); a stock DO
+	#      droplet — whose only disk is partitioned + mounted as root — has no
+	#      unused disk, so it falls back to a sparse loopback file on the root fs.
+	#      The operator can force a device with ATLAS_POOL_DEVICE. dm_thin_pool is
+	#      the kernel target the pool runs on; load it now and persist it for
+	#      reboots. The 60-atlas-blocklist (step 6) targets unused fs/net modules
+	#      only and never touches dm_*, so this is unaffected. ThinPool.ensure()
+	#      (idempotent) does the pv/vg/pool work; atlas-pool.service re-asserts the
+	#      backing (re-binding the loop device for the file backing; a real-device
+	#      PV needs nothing) after a reboot since bootstrap is not re-run on boot.
 	run("sudo", "modprobe", "dm_thin_pool")
 	install_file("dm_thin_pool\n", "/etc/modules-load.d/60-atlas-lvm.conf", mode="0644")
 	ThinPool().ensure()
