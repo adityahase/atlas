@@ -12,6 +12,7 @@
   "title",
   "column_break_header",
   "is_active",
+  "tenant",
   "default_disk_gigabytes",
   "section_break_image_data",
   "section_break_kernel",
@@ -57,6 +58,15 @@
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Is Active"
+  },
+  {
+   "description": "The tenant that owns this image, set once by Central. Empty for shared base images.",
+   "fieldname": "tenant",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Tenant",
+   "options": "Tenant",
+   "set_only_once": 1
   },
   {
    "default": "4",

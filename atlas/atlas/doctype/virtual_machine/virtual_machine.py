@@ -26,6 +26,7 @@ IMMUTABLE_AFTER_INSERT = (
 	"server",
 	"image",
 	"ssh_public_key",
+	"tenant",
 )
 
 # Frozen on ordinary saves (drift protection: the on-host VM must match the

@@ -13,6 +13,7 @@
   "image",
   "column_break_header",
   "status",
+  "tenant",
   "section_break_resources",
   "size_preset",
   "column_break_resources_0",
@@ -101,6 +102,15 @@
    "options": "Pending\nRunning\nPaused\nStopped\nFailed\nTerminated",
    "read_only": 1,
    "reqd": 1
+  },
+  {
+   "description": "The tenant that owns this VM, set once by Central. Empty for operator-created VMs.",
+   "fieldname": "tenant",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Tenant",
+   "options": "Tenant",
+   "set_only_once": 1
   },
   {
    "fieldname": "section_break_resources",

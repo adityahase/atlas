@@ -1041,6 +1041,81 @@ dialog's inline add) drive creation and deletion through the standard endpoints.
 
 ---
 
+## Tenant
+
+The unit of ownership/grouping for Atlas resources. A tenant is created and
+managed by **Central** — the external system that owns end-users and talks to
+Atlas as the operator. Central sets the immutable `email` and `central_reference`
+once at creation, then stamps the optional, set-only-once `tenant` link on the
+resources it provisions (`Virtual Machine`, `Virtual Machine Image`,
+`Virtual Machine Snapshot`).
+
+This is operator/Central-facing only (System Manager permission, no `Atlas User`
+row, no SPA nav item). It is pure data plus list helpers — no Tasks, no
+lifecycle.
+
+> **Scope note.** The existing owner-based scoping (see
+> [11-user-ui.md](./11-user-ui.md)) is **unchanged** for now: `Atlas User`
+> access to VMs/Snapshots/Keys/Sites is still `if_owner` on Frappe's built-in
+> `owner`. Central-driven tenancy that supersedes that boundary (and retires the
+> user-facing SPA) is a follow-on. The `tenant` link is additive: it groups
+> resources under a tenant without changing any permission today.
+
+### Fields
+
+| Field               | Type              | Reqd | Read-only | Notes                                                                              |
+| ------------------- | ----------------- | ---- | --------- | ---------------------------------------------------------------------------------- |
+| `name`              | (autoname `hash`) | Y    | Y         | Primary key. UUID (`str(uuid.uuid4())`), like Virtual Machine / Snapshot / Server. |
+| `title`             | Data              |      |           | `title_field`. Human label for lists.                                              |
+| `email`             | Data (`Email`)    | Y    |           | `set_only_once`, `unique`. Central sets once. Lowercased in `validate()`.          |
+| `central_reference` | Data              | Y    |           | `set_only_once`, `unique`. The Central-side resource id this tenant maps to.       |
+
+Immutability of `email` / `central_reference` is enforced both by the JSON
+`set_only_once` and by a controller `IMMUTABLE_AFTER_INSERT` guard — the same
+belt-and-suspenders pattern as `Virtual Machine` and `Virtual Machine Image`.
+Uniqueness is a DB unique index from the JSON `unique` flag.
+
+### The `tenant` link on resources
+
+`Virtual Machine`, `Virtual Machine Image`, and `Virtual Machine Snapshot` each
+gain an optional, `set_only_once` `tenant` Link (empty for operator-created
+resources; Central stamps it once). `tenant` is added to each controller's
+`IMMUTABLE_AFTER_INSERT` tuple so a re-stamp is rejected (the Snapshot relies on
+the framework's `set_only_once` alone — it has no immutability tuple).
+
+### Controller methods
+
+- `virtual_machines()` / `images()` / `snapshots()` (whitelisted) — the rows of
+  each resource type stamped with this tenant, newest first.
+- `resources()` (whitelisted) — all three in one round-trip as
+  `{"virtual_machines": [...], "images": [...], "snapshots": [...]}`; reuses the
+  individual helpers so there is one source of truth for fields/filters.
+
+### Form layout
+
+```
+── Overview ──
+title
+email
+central_reference
+```
+
+### List view
+
+- Columns: `title`, `email`, `central_reference`.
+
+### Permissions
+
+System Manager only (all perms). No `Atlas User` row — Tenant is reached by
+Central/operator, never by an end-user in the SPA.
+
+### Buttons
+
+None. Central drives creation and the `tenant` stamping through the standard
+endpoints / whitelisted methods.
+
+---
+
 ## Task
 
 One row per shell script execution against a server. Append-only: every field

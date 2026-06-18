@@ -13,6 +13,7 @@
   "server",
   "column_break_header",
   "status",
+  "tenant",
   "section_break_disk",
   "source_image",
   "disk_gigabytes",
@@ -81,6 +82,15 @@
    "options": "Pending\nAvailable\nFailed",
    "read_only": 1,
    "reqd": 1
+  },
+  {
+   "description": "The tenant that owns this snapshot, set once by Central. Empty for operator snapshots.",
+   "fieldname": "tenant",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Tenant",
+   "options": "Tenant",
+   "set_only_once": 1
   },
   {
    "fieldname": "section_break_disk",

@@ -11,6 +11,7 @@ IMMUTABLE_AFTER_INSERT = (
 	"rootfs_url",
 	"rootfs_filename",
 	"rootfs_sha256",
+	"tenant",
 )
 
 
