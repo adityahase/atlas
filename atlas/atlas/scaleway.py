@@ -89,9 +89,16 @@ class ScalewayClient:
 
 	def register_ssh_key(self, name: str, public_key: str, project_id: str) -> dict:
 		"""Register an SSH public key with IAM and return the created key (with
-		its `id`, the handle install referencing). Global, project-scoped."""
+		its `id`, the handle install referencing). Global, project-scoped.
+
+		IAM v1alpha1 returns the created SSH-key resource at the TOP LEVEL (the
+		`id`/`public_key`/`name` fields are unwrapped), NOT inside an `{"ssh_key":
+		{...}}` envelope — confirmed against the live API, where assuming the
+		envelope raised `KeyError: 'ssh_key'`. Tolerate both shapes (unwrap a legacy
+		envelope if one ever appears) so the handler survives an API-shape change."""
 		body = {"name": name, "public_key": public_key, "project_id": project_id}
-		return self._request("POST", "/iam/v1alpha1/ssh-keys", json=body)["ssh_key"]
+		response = self._request("POST", "/iam/v1alpha1/ssh-keys", json=body)
+		return response.get("ssh_key", response)
 
 	def list_ssh_keys(self, project_id: str) -> list[dict]:
 		"""List the project's registered SSH keys (first page), so the provider

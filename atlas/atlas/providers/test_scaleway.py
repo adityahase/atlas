@@ -372,3 +372,38 @@ class TestScalewayClientMapping(IntegrationTestCase):
 		self.assertEqual(_money_to_int({"units": 39, "nanos": 990000000}), 40)
 		self.assertEqual(_money_to_int({"units": 134, "nanos": 0}), 134)
 		self.assertIsNone(_money_to_int({}))
+
+
+class TestScalewayClientHttp(IntegrationTestCase):
+	"""HTTP-layer contract tests — mock the transport (`_raw_request`) so the
+	response-unwrapping the provider tests bypass (they mock the whole client) is
+	exercised against the SHAPE the live API actually returns."""
+
+	def _client(self):
+		from atlas.atlas.scaleway import ScalewayClient
+
+		return ScalewayClient(secret_key="scw-secret", zone="fr-par-2")
+
+	def _response(self, status: int, payload: dict):
+		"""A stand-in requests.Response: status + .json() + truthy .content."""
+		return SimpleNamespace(status_code=status, content=b"x", json=lambda: payload)
+
+	def test_register_ssh_key_returns_top_level_resource(self) -> None:
+		"""IAM returns the created key UNWRAPPED (id/public_key at top level), not
+		inside an `{"ssh_key": ...}` envelope. The live API raised KeyError when we
+		assumed the envelope — this pins the real shape."""
+		client = self._client()
+		api_payload = {"id": "key-uuid-123", "name": "atlas-x", "public_key": "ssh-ed25519 AAAA x"}
+		with patch.object(client, "_raw_request", return_value=self._response(200, api_payload)):
+			created = client.register_ssh_key(name="atlas-x", public_key="ssh-ed25519 AAAA x", project_id="p")
+		self.assertEqual(created["id"], "key-uuid-123")
+
+	def test_register_ssh_key_unwraps_legacy_envelope(self) -> None:
+		"""If a future/legacy response DOES wrap the key in `{"ssh_key": ...}`, still
+		unwrap it — the handler tolerates both shapes."""
+		client = self._client()
+		with patch.object(
+			client, "_raw_request", return_value=self._response(200, {"ssh_key": {"id": "wrapped"}})
+		):
+			created = client.register_ssh_key(name="a", public_key="b", project_id="p")
+		self.assertEqual(created["id"], "wrapped")
