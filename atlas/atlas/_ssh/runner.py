@@ -33,6 +33,14 @@ DURABLE_PACKAGE_DIRECTORY = "/var/lib/atlas/bin"
 # _run_remote_script purges it before every Task.
 STALE_STAGED_PACKAGE_DIRECTORY = f"{REMOTE_STAGING_DIRECTORY}/lib"
 
+# Echoed by the durable-invocation guard when /var/lib/atlas/bin/<script> is
+# absent (a host that predates the durable-scripts cutover). The guard gates the
+# echo behind `test -f … ||`, so this string appears in a Task's output ONLY when
+# the durable copy was missing — never from a script's own run — which lets
+# _run_remote_script fall back to staging without misreading a real script's
+# output or exit code.
+DURABLE_MISSING_MARKER = "__ATLAS_DURABLE_SCRIPT_MISSING__"
+
 
 def run_task(
 	*,
@@ -223,11 +231,30 @@ def _run_remote_script(
 		# must be re-bootstrapped / sync_scripts'd — the same refresh contract the
 		# durable atlas package already follows.
 		if durable_remote and not uploads:
-			command = _remote_command(script, durable_remote, variables)
-			return run_ssh(connection, key_path, command, timeout_seconds=timeout_seconds)
+			# Guard so a host that predates the durable-scripts cutover (no
+			# /var/lib/atlas/bin/<script> yet) degrades to the staging path below
+			# for this one Task instead of failing: `test -f` short-circuits to the
+			# marker before the interpreter ever opens the file, so nothing ran and
+			# a staged re-run is safe. The marker can only come from this guard (the
+			# echo is gated behind the `||`), so it is an unambiguous fall-back
+			# signal. A re-bootstrap / sync_scripts makes the fast path stick.
+			inner = _remote_command(script, durable_remote, variables)
+			guarded = (
+				f"test -f {shlex.quote(durable_remote)} "
+				f"|| {{ echo {DURABLE_MISSING_MARKER}; exit 127; }}\n{inner}"
+			)
+			stdout, stderr, exit_code = run_ssh(connection, key_path, guarded, timeout_seconds=timeout_seconds)
+			if not (exit_code != 0 and DURABLE_MISSING_MARKER in stdout):
+				return stdout, stderr, exit_code
+			frappe.logger("atlas").warning(
+				f"durable script {durable_remote} missing on host; staging this Task — "
+				f"re-bootstrap / sync_scripts the server to restore the fast path"
+			)
+			# fall through to the staging path
 
 		# Staging path: e2e probe scripts (resolved from the test directory, never
-		# shipped durably) and the few scripts with per-Task sidecars (sync-image).
+		# shipped durably), the few scripts with per-Task sidecars (sync-image), and
+		# a durable script whose host copy is missing (the fall-through just above).
 		# Create the staging dir and every remote parent directory the uploads need
 		# in one round trip. The purge first: hosts bootstrapped before the
 		# durable-package cutover still carry a per-Task staged copy of the lib at

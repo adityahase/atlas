@@ -278,6 +278,37 @@ class TestDurableScriptInvocation(IntegrationTestCase):
 		self.assertEqual(len(ssh_commands), 1)
 		self.assertIn("/var/lib/atlas/bin/start-vm.py", ssh_commands[0])
 
+	def test_durable_missing_falls_back_to_staging(self) -> None:
+		# A host that predates the durable-scripts cutover lacks
+		# /var/lib/atlas/bin/start-vm.py. The guard short-circuits to the marker
+		# (nothing ran), and the runner must stage + run the script instead of
+		# failing — so the Task still succeeds and an scp happens. Zero-downtime
+		# deploy: the fast path needs no flag-day re-bootstrap of every host.
+		calls: list = []
+
+		def capture(args, **kwargs):
+			calls.append(args)
+			if args[0] == "ssh" and runner.DURABLE_MISSING_MARKER in args[-1]:
+				return subprocess.CompletedProcess(
+					args, 127, stdout=runner.DURABLE_MISSING_MARKER + "\n", stderr=""
+				)
+			return _ok(args, **kwargs)
+
+		with patch("atlas.atlas._ssh.transport.subprocess.run", side_effect=capture):
+			task = run_task(
+				connection=CONNECTION,
+				script="start-vm.py",
+				variables={"VIRTUAL_MACHINE_NAME": "uuid-1"},
+			)
+
+		self.assertEqual(task.status, "Success")
+		# Fell back to staging: the script was scp'd and a staging mkdir ran.
+		self.assertTrue(any(args[0] == "scp" for args in calls))
+		self.assertTrue(any(args[0] == "ssh" and "mkdir -p" in args[-1] for args in calls))
+		# The final invocation runs the staged copy, not the (absent) durable one.
+		last_ssh = [args for args in calls if args[0] == "ssh"][-1]
+		self.assertIn("/tmp/atlas/start-vm.py", last_ssh[-1])
+
 
 class TestRemoteCommand(IntegrationTestCase):
 	"""The .py vs .sh dispatch in runner._remote_command — the heart of the
