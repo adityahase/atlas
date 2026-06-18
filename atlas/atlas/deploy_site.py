@@ -129,10 +129,12 @@ def deploy_site(virtual_machine: str, site_name: str) -> None:
 		)
 		run_scp(connection, key_path, local_script, remote_script, timeout_seconds=300)
 		# python3 explicitly: an SSH `command` is non-interactive and the script's
-		# shebang is enough, but the deploy script needs the system python (it shells
-		# out to the baked bench-cli, which owns its own uv venv). Warm: rename +
-		# `setup nginx` + reload + probe (fast — no restart). Cold: also `setup
-		# production` (nginx + supervisor) first, which takes longer.
+		# shebang is enough, but the deploy script needs the system python (it drops to
+		# the `frappe` user and shells out to the baked bench-cli, which owns its own uv
+		# venv). Warm: rename + `setup nginx` + reload + probe (fast — no restart). Cold:
+		# also an idempotent `bench start` first. The deploy script defaults to site
+		# mode (--mode site); admin-mode wiring (--mode admin) is a follow-up that reads
+		# the mode from the cloned golden snapshot.
 		command = f"python3 {shlex.quote(remote_script)} --site-name {shlex.quote(site_name)}"
 		# A warm-restored clone (resumed from a golden memory snapshot, not
 		# booted): the deploy gates on the in-guest identity freshen having

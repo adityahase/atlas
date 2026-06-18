@@ -104,11 +104,17 @@ def _finalize_proxy(virtual_machine, connection, key_path) -> tuple[str, str, in
 # the bench build VM (and therefore the snapshot, and clones from it) gets a
 # roomier disk and 2 GB RAM. These were GOLDEN_DISK_GB / GOLDEN_MEMORY_MB in the
 # e2e module; they live with the recipe now (spec/14 "~2 GB/site" host-sizing).
-# 12 GB proved too small: the 7 GB ZFS file vdev (bench.toml [volume.image]) sits
-# on root alongside the OS + bench (~4 GB), leaving no room for MariaDB's /tmp
-# temp files when new-site builds the ERPNext schema — it dies "No space left on
-# device" (Errcode 28). 20 GB leaves ~8 GB of /tmp headroom for the schema build.
-_BENCH_DISK_GB = 20
+#
+# Sizing is dominated by the ZFS file vdev: bench.toml's [volume.image] preallocates
+# a 15 GB image (`bench-pool.img`) on ROOT, so root must hold that 16 GB file PLUS
+# the OS (~3 GB) PLUS the transient yarn cache + node_modules extraction `bench init`
+# does on root (~4-5 GB) — the bench code/site itself lands on the ZFS dataset, but
+# yarn's cache (~/.cache) does not. 20 GB proved too small once the vdev grew 7→15 GB:
+# `bench init` died "ENOSPC … Extracting tar content" at the [9/15] yarn step with
+# root 100% full (16 GB vdev left only ~4 GB). 28 GB restores ~9 GB of headroom above
+# the vdev + OS for the node-deps build (and for MariaDB's /tmp during the ERPNext
+# schema build). Keep this in step with bench.toml's [volume.image] size.
+_BENCH_DISK_GB = 28
 _BENCH_MEMORY_MB = 2048
 
 

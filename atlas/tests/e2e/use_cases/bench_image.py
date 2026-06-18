@@ -135,17 +135,18 @@ def _provision_build_vm(server_name: str, image: str) -> "frappe.model.document.
 
 
 def _assert_bench_works(vm) -> str:
-	"""SSH into the guest and run `bench --version` through the baked PATH (the
-	/etc/profile.d drop-in build.sh writes). Proves the bake survived
-	unsquash→pack→provision→boot and bench is actually invokable, not just
-	present on disk."""
+	"""SSH into the guest and run `bench -b atlas list-apps` AS the frappe user
+	through its login shell (install.sh put bench-cli on PATH in the frappe user's
+	~/.bashrc, and the bench is baked under that user). Proves the bake survived
+	unsquash→pack→provision→boot and bench is actually invokable, not just present
+	on disk. The controller SSHes in as root, so drop to frappe with `sudo -u`."""
 	connection = connection_for_guest(vm)
 	with ssh_key_file(connection.ssh_private_key) as key_path:
 		stdout, stderr, code = run_ssh(
 			connection,
 			key_path,
-			# Login shell so /etc/profile.d/atlas-bench.sh is sourced.
-			"bash -lc 'bench -b atlas list-apps'",
+			# Drop to frappe through a login shell so ~/.bashrc's PATH is sourced.
+			"sudo -u frappe bash -lc 'bench -b atlas list-apps'",
 			timeout_seconds=120,
 		)
 	assert code == 0, f"bench did not run in the guest (exit {code}): {stderr[-500:]}"
