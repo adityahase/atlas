@@ -34,8 +34,7 @@
    "label": "Email",
    "options": "Email",
    "reqd": 1,
-   "set_only_once": 1,
-   "unique": 1
+"set_only_once": 1
   },
   {
    "description": "The Central-side resource id this tenant maps to. Set once at creation; immutable afterward.",
