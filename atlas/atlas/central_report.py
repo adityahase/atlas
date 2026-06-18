@@ -77,6 +77,11 @@ def deliver(event_type: str, payload: dict) -> None:
 	settings = frappe.get_single("Central Settings")
 	if not settings.enabled:
 		return
+	if not settings.atlas_id:
+		# Enabled but not yet registered: without an atlas_id Central can't route
+		# the event, so skip rather than POST an unroutable None. Register first.
+		settings.db_set("last_event_status", "skipped: register with Central first", commit=True)
+		return
 	try:
 		settings.client().post_event(
 			{
@@ -98,8 +103,13 @@ def deliver(event_type: str, payload: dict) -> None:
 
 
 def _vm_payload(doc) -> dict:
+	# The owning Central team, so the control plane can attribute this VM to a
+	# tenant. Resolved from the VM's Tenant link; None for operator-owned VMs.
+	central_reference = frappe.db.get_value("Tenant", doc.tenant, "central_reference") if doc.tenant else None
 	return {
 		"name": doc.name,
+		"central_reference": central_reference,
+		"title": doc.title,
 		"status": doc.status,
 		"server": doc.server,
 		"size_preset": doc.get("size_preset"),

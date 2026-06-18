@@ -91,3 +91,20 @@ Atlas calls Central's whitelisted methods at
 The route names and payloads are the single external dependency; the whole
 contract is absorbed in `atlas/atlas/central.py` (`CentralClient`), so a change
 on Central's side is a one-file edit here.
+
+Every VM event payload carries `central_reference` — the owning team, resolved
+from the VM's `Tenant` (None for operator-owned VMs) — so Central can attribute
+the event to a tenant without a reverse lookup.
+
+## Reconcile (Central → Atlas)
+
+Event delivery is fire-and-forget, so Central also **pulls** the authoritative VM
+list periodically to correct drift. Atlas exposes one operator-only read for this:
+
+| Central call | Atlas method | Returns |
+| --- | --- | --- |
+| reconcile mirror | `atlas.atlas.api.inventory.tenant_vms(central_reference?)` | `[ { name, central_reference, status, gateway_url } ]` |
+
+It returns every tenant-tagged VM (optionally scoped to one `central_reference`);
+untenanted operator VMs are never returned. This is the only Central→Atlas read;
+all Central→Atlas *writes* reuse the existing whitelisted VM controller methods.

@@ -1,8 +1,7 @@
 {
  "actions": [],
- "creation": "2026-06-18 00:00:00.000000",
+ "creation": "2026-06-18 00:00:00",
  "doctype": "DocType",
- "editable_grid": 0,
  "engine": "InnoDB",
  "field_order": [
   "section_break_connection",
@@ -26,43 +25,45 @@
    "label": "Connection"
   },
   {
+   "description": "Base URL of the Central instance, e.g. https://central.frappe.cloud",
    "fieldname": "url",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "URL",
-   "reqd": 1,
-   "description": "Base URL of the Central instance, e.g. https://central.frappe.cloud"
+   "reqd": 1
   },
   {
+   "description": "Public key id issued by Central.",
    "fieldname": "api_key",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "API Key",
-   "reqd": 1,
-   "description": "Public key id issued by Central."
+   "reqd": 1
   },
   {
+   "description": "Secret paired with the API key. Rotate by clearing via db.set_value, then re-saving.",
    "fieldname": "api_secret",
    "fieldtype": "Password",
+   "in_list_view": 1,
    "label": "API Secret",
-   "reqd": 1,
-   "set_only_once": 1,
-   "description": "Secret paired with the API key. Rotate by clearing via db.set_value, then re-saving."
+   "reqd": 1
   },
   {
    "fieldname": "column_break_connection",
    "fieldtype": "Column Break"
   },
   {
+   "description": "This Atlas's region, announced at Register. Defaults from site config atlas_do_region if left blank.",
    "fieldname": "region",
    "fieldtype": "Data",
-   "label": "Region",
-   "description": "This Atlas's region, announced at Register. Defaults from site config atlas_do_region if left blank."
+   "label": "Region"
   },
   {
    "default": "0",
+   "description": "Master switch. When off, VM lifecycle events are not reported to Central.",
    "fieldname": "enabled",
    "fieldtype": "Check",
-   "label": "Enabled",
-   "description": "Master switch. When off, VM lifecycle events are not reported to Central."
+   "label": "Enabled"
   },
   {
    "fieldname": "section_break_registration",
@@ -70,11 +71,11 @@
    "label": "Registration"
   },
   {
+   "description": "Central's id for this Atlas. Filled by Register.",
    "fieldname": "atlas_id",
    "fieldtype": "Data",
    "label": "Atlas ID",
-   "read_only": 1,
-   "description": "Central's id for this Atlas. Filled by Register."
+   "read_only": 1
   },
   {
    "fieldname": "registered_on",
@@ -87,23 +88,23 @@
    "fieldtype": "Column Break"
   },
   {
+   "description": "Last successful Fetch Sizes / Fetch Images.",
    "fieldname": "last_sync",
    "fieldtype": "Datetime",
    "label": "Last Sync",
-   "read_only": 1,
-   "description": "Last successful Fetch Sizes / Fetch Images."
+   "read_only": 1
   },
   {
+   "description": "Outcome of the most recent event delivery.",
    "fieldname": "last_event_status",
    "fieldtype": "Small Text",
    "label": "Last Event Status",
-   "read_only": 1,
-   "description": "Outcome of the most recent event delivery."
+   "read_only": 1
   }
  ],
  "issingle": 1,
  "links": [],
- "modified": "2026-06-18 00:00:00.000000",
+ "modified": "2026-06-18 19:27:29.995245",
  "modified_by": "Administrator",
  "module": "Atlas",
  "name": "Central Settings",
@@ -117,6 +118,7 @@
    "write": 1
   }
  ],
+ "row_format": "Dynamic",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

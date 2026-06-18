@@ -10,6 +10,25 @@ from atlas.atlas.secrets import get_secret
 
 
 class CentralSettings(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from frappe.types import DF
+
+		api_key: DF.Data
+		api_secret: DF.Password
+		atlas_id: DF.Data | None
+		enabled: DF.Check
+		last_event_status: DF.SmallText | None
+		last_sync: DF.Datetime | None
+		region: DF.Data | None
+		registered_on: DF.Datetime | None
+		url: DF.Data
+	# end: auto-generated types
+
 	@frappe.whitelist()
 	def test_connection(self) -> dict:
 		"""Ping Central. Mirrors DigitalOceanSettings.test_connection — returns a
