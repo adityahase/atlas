@@ -5,20 +5,19 @@ many Atlas instances; Atlas is the *client*. This is the inverse of the Provider
 relationship — so the client mirrors atlas/atlas/digitalocean.py: a thin
 requests wrapper, one *Error type, dataclasses for the typed responses.
 
-Central is an ordinary Frappe site, not a bespoke API. Atlas authenticates to it
-as a privileged Central user (an API key/secret stored in Central Settings) and
-drives Central's standard document API:
+Atlas calls Central's whitelisted methods at `<url>/api/method/central.api.<name>`
+with a `token <api_key>:<api_secret>` header (spec/16-central.md § "The wire
+contract"). Central owns the `Atlas Instance` registry: the operator pre-creates
+one row per region (with this Atlas's callback `api_key`/`api_secret`), and:
 
-- **ping** — log in with those keys and confirm the session resolves to a real
-  user (`frappe.auth.get_logged_user` != Guest), via FrappeClient.
-- **register** — `insert` an `Atlas Instance` row on Central (the read-side
-  registry Central keeps of every Atlas). The row carries this Atlas's `base_url`
-  and a callback `api_key`/`api_secret` (Administrator's, minted Atlas-side) so
-  Central can drive this Atlas in return.
+- **ping** — `central.api.ping` returns `{label}`; a credential + reachability
+  check for the Test Connection toast.
+- **register** — `central.api.register` matches the operator-created row by
+  region and stamps a stable `atlas_id`, which Atlas then stores and reports on
+  every event so Central can route them to this cluster.
 
-Fetch Sizes / Fetch Images / event reporting still call Central's whitelisted
-`central.api.*` methods over a token header (see `_request` / `_ROUTES`); those
-are untouched.
+The route names and payloads are the single external dependency; the whole
+contract is absorbed here, so a change on Central's side is a one-file edit.
 """
 
 from __future__ import annotations
@@ -27,42 +26,14 @@ import dataclasses
 
 import frappe
 import requests
-from frappe.frappeclient import (
-	AuthError,
-	FrappeClient,
-	FrappeException,
-	SiteExpiredError,
-	SiteUnreachableError,
-)
 
 DEFAULT_TIMEOUT = 30
 
-# Central's read-registry DocType — one row per Atlas. `register` inserts here.
-CENTRAL_ATLAS_DOCTYPE = "Atlas Instance"
-
-# Everything FrappeClient can raise on a failed call. ping/register translate
-# these into CentralError so callers see one error type, never a leaked
-# transport exception. AuthError/Site* carry no message, so _describe names them.
-_CLIENT_ERRORS = (
-	FrappeException,
-	AuthError,
-	SiteExpiredError,
-	SiteUnreachableError,
-	requests.RequestException,
-)
-
-
-def _describe(exception: Exception) -> str:
-	"""Human-readable text for a FrappeClient failure. The auth/reachability
-	exceptions are message-less marker classes, so fall back to the class name."""
-	return str(exception) or type(exception).__name__
-
-
-# Central method routes for the telemetry seam (sizes / images / events). Pinned
-# in one place — the wire contract from spec/16-central.md § "The wire contract".
-# ping / register are NOT here: they go through Central's standard Frappe API
-# (login + document insert), not bespoke central.api.* methods.
+# Central method routes. Pinned in one place — the wire contract from
+# spec/16-central.md § "The wire contract".
 _ROUTES = {
+	"ping": "central.api.ping",
+	"register": "central.api.register",
 	"sizes": "central.api.sizes",
 	"images": "central.api.images",
 	"event": "central.api.event",
@@ -109,56 +80,30 @@ class CentralImageInfo:
 class CentralClient:
 	"""Talks to a single Central instance. Constructed from Central Settings."""
 
-	def __init__(
-		self,
-		url: str,
-		api_key: str,
-		api_secret: str,
-		timeout: int = DEFAULT_TIMEOUT,
-		verify: bool = True,
-	):
+	def __init__(self, url: str, api_key: str, api_secret: str, timeout: int = DEFAULT_TIMEOUT):
 		self.url = url.rstrip("/")
 		self.api_key = api_key
 		self.api_secret = api_secret
 		self.timeout = timeout
-		self.verify = verify
 
 	def ping(self) -> CentralAuthResult:
-		"""Credential check. Logs in to Central with the configured keys and
-		confirms the session resolves to a real user. Never raises — returns
-		ok=False so the Test Connection toast can render a red indicator."""
+		"""Credential check. Never raises — returns ok=False so the Test
+		Connection toast can render a red indicator."""
 		try:
-			user = self._frappe_client().get_api("frappe.auth.get_logged_user")
-		except _CLIENT_ERRORS as exception:
-			return CentralAuthResult(ok=False, error=_describe(exception))
-		if not user or user == "Guest":
-			return CentralAuthResult(ok=False, error="Not logged in to Central (Guest session)")
-		return CentralAuthResult(ok=True, label=user)
+			body = self._request("GET", "ping")
+		except CentralError as exception:
+			return CentralAuthResult(ok=False, error=str(exception))
+		return CentralAuthResult(ok=True, label=body.get("label"))
 
-	def register(self, identity: dict, mint_credentials) -> RegistrationResult:
-		"""Create this Atlas's `Atlas Instance` row on Central. `identity` is the
-		region + base_url + status; `mint_credentials` is a zero-arg callable
-		returning the {api_key, api_secret} Central will use to call back.
-
-		The callback secret is minted *only after* the region is confirmed free —
-		minting rotates a live secret, so a duplicate-region registration must not
-		clobber the credentials of the registration already on Central. Central
-		autonames by region, so the insert is the hard duplicate guard; the
-		pre-check just turns it into a clean message."""
-		region = identity.get("region")
-		if not region:
-			raise CentralError("Cannot register without a region")
-		client = self._frappe_client()
-		try:
-			if client.get_value(CENTRAL_ATLAS_DOCTYPE, "name", {"region": region}):
-				raise CentralError(f"Atlas for region {region!r} is already registered on Central")
-			doc = client.insert({"doctype": CENTRAL_ATLAS_DOCTYPE, **identity, **mint_credentials()})
-		except _CLIENT_ERRORS as exception:
-			raise CentralError(_describe(exception)) from exception
-		atlas_id = (doc or {}).get("name")
+	def register(self, identity: dict) -> RegistrationResult:
+		"""Announce this Atlas to Central. `identity` is the region payload Central
+		matches against its operator-created `Atlas Instance` row; Central stamps
+		and returns the stable `atlas_id` Atlas reports on every event."""
+		body = self._request("POST", "register", json=identity)
+		atlas_id = body.get("atlas_id")
 		if not atlas_id:
-			raise CentralError("Central did not return the created Atlas Instance")
-		return RegistrationResult(atlas_id=atlas_id, label=atlas_id)
+			raise CentralError("Central register returned no atlas_id")
+		return RegistrationResult(atlas_id=atlas_id, label=body.get("label"))
 
 	def fetch_sizes(self) -> tuple[CentralSizeInfo, ...]:
 		rows = self._request("GET", "sizes").get("sizes", [])
@@ -188,16 +133,8 @@ class CentralClient:
 			for row in rows
 		)
 
-	def post_event(self, event: dict) -> None:
-		self._request("POST", "event", json=event)
-
-	def _frappe_client(self) -> FrappeClient:
-		"""A FrappeClient bound to Central, authenticated by the stored key/secret.
-
-		Construction sets the auth header but does not hit the network — bad keys
-		surface on the first call (e.g. ping's get_logged_user), translated to
-		CentralError by the calling method."""
-		return FrappeClient(self.url, api_key=self.api_key, api_secret=self.api_secret, verify=self.verify)
+	def post_event(self, event: dict) -> dict:
+		return self._request("POST", "event", json=event)
 
 	def _request(self, method: str, route_key: str, json: dict | None = None) -> dict:
 		url = f"{self.url}/api/method/{_ROUTES[route_key]}"
