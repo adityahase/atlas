@@ -33,7 +33,7 @@
    "reqd": 1
   },
   {
-   "description": "Public key id issued by Central.",
+   "description": "API key of a privileged Central user. Atlas logs in to Central with this to register and report.",
    "fieldname": "api_key",
    "fieldtype": "Data",
    "in_list_view": 1,
@@ -41,7 +41,7 @@
    "reqd": 1
   },
   {
-   "description": "Secret paired with the API key. Rotate by clearing via db.set_value, then re-saving.",
+   "description": "API secret paired with the Central user's key. Rotate by clearing via db.set_value, then re-saving.",
    "fieldname": "api_secret",
    "fieldtype": "Password",
    "in_list_view": 1,
