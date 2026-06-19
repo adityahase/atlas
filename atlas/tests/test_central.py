@@ -153,7 +153,9 @@ class TestCentralUpsert(IntegrationTestCase):
 
 class TestCentralReport(IntegrationTestCase):
 	def _vm(self, status="Running", before_status="Pending"):
-		doc = SimpleNamespace(name="vm-1", status=status, server="srv-1", doctype="Virtual Machine")
+		doc = SimpleNamespace(
+			name="vm-1", title="vm-1", status=status, server="srv-1", doctype="Virtual Machine", tenant=None
+		)
 		doc.get = lambda key, default=None: getattr(doc, key, default)
 		doc.get_doc_before_save = lambda: (
 			SimpleNamespace(status=before_status) if before_status is not None else None
