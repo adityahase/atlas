@@ -338,7 +338,12 @@ class TestVirtualMachineLifecycle(IntegrationTestCase):
 		# untouched when the caller doesn't pass it.
 		from atlas.atlas.doctype.virtual_machine import virtual_machine as module
 
-		vm = _vm_with_status("Stopped")  # defaults to Hard cap
+		# cpu_mode is immutable after insert (only resize() may change it), so the
+		# Hard-cap start state has to be set at construction.
+		vm = _new_vm(cpu_mode="Hard cap")
+		vm.status = "Stopped"
+		vm.last_stopped = frappe.utils.now_datetime()
+		vm.save(ignore_permissions=True)
 		self.assertEqual(vm.cpu_mode, "Hard cap")
 		with patch.object(module, "run_task", return_value=fake_task()):
 			vm.resize(cpu_mode="Relaxed")

@@ -5,7 +5,7 @@ import frappe
 from frappe.model.document import Document
 
 from atlas.atlas.networking import (
-	CPU_MODE_HARD,
+	CPU_MODE_RELAXED,
 	allocate_ipv6,
 	cgroup_args,
 	derive_ipv4_link,
@@ -96,12 +96,13 @@ class VirtualMachine(Document):
 		# The size presets set it explicitly (fractional shares for sub-1 sizes).
 		if not self.cpu_max_cores:
 			self.cpu_max_cores = float(self.vcpus or 1)
-		# cpu_mode picks how that share is enforced. Default to the hard cgroup
-		# cpu.max ceiling — the original, predictable behavior — for any caller
-		# that does not opt into the relaxed/burst model. The JSON default covers
-		# the form path; this covers direct API/test construction.
+		# cpu_mode picks how that share is enforced. Default to the relaxed
+		# cpu.weight floor + burst ceiling — VMs get their guaranteed share under
+		# contention but burst into spare host CPU when it's idle — for any caller
+		# that does not opt into the hard-cap model. The JSON default covers the
+		# form path; this covers direct API/test construction.
 		if not self.cpu_mode:
-			self.cpu_mode = CPU_MODE_HARD
+			self.cpu_mode = CPU_MODE_RELAXED
 
 	def set_status_default(self) -> None:
 		if not self.status:

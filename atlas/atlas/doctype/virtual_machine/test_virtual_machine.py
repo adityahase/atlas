@@ -92,7 +92,13 @@ class TestVirtualMachine(IntegrationTestCase):
 		# stripped — every element is a bare value.
 		expected_cgroup = [
 			token
-			for token in cgroup_args(vm.cpu_max_cores, vm.memory_megabytes, vm.disk_gigabytes)
+			for token in cgroup_args(
+				vm.cpu_max_cores,
+				vm.memory_megabytes,
+				vm.disk_gigabytes,
+				vm.cpu_mode,
+				vm.vcpus,
+			)
 			if not token.startswith("--")
 		]
 		expected_resource = [
@@ -118,20 +124,30 @@ class TestVirtualMachine(IntegrationTestCase):
 		self.assertEqual(cpu_max, "cpu.max=200000 100000")
 
 	def test_fractional_cpu_max_cores_in_provision_cgroup(self) -> None:
-		# A 1/16-vCPU machine: one guest thread (vcpus=1), host-throttled to
-		# 6.25% of a core. The guest boots on vcpu_count=1 (VCPUS), and the cgroup
-		# cpu.max carries the fractional quota.
-		vm = _new_vm(vcpus=1, cpu_max_cores=0.0625)
+		# A 1/16-vCPU machine under hard-cap mode: one guest thread (vcpus=1),
+		# host-throttled to 6.25% of a core. The guest boots on vcpu_count=1
+		# (VCPUS), and the cgroup cpu.max carries the fractional quota.
+		vm = _new_vm(vcpus=1, cpu_max_cores=0.0625, cpu_mode="Hard cap")
 		self.assertEqual(vm.cpu_max_cores, 0.0625)
 		variables = vm._provision_variables()
 		self.assertEqual(variables["VCPUS"], "1", "guest still boots one vcpu thread")
 		cpu_max = next(v for v in variables["CGROUP_ARG"] if v.startswith("cpu.max="))
 		self.assertEqual(cpu_max, "cpu.max=6250 100000")
 
-	def test_cpu_mode_defaults_to_hard_cap(self) -> None:
+	def test_cpu_mode_defaults_to_relaxed(self) -> None:
 		# A caller who sets no cpu_mode (operator desk path, bootstrap, direct API)
-		# gets the original hard ceiling: cpu.max == cpu_max_cores, no cpu.weight.
+		# gets the relaxed model: cpu.weight floor + a loose whole-vcpu burst
+		# ceiling, so the VM bursts into spare host CPU when the host is idle.
 		vm = _new_vm(vcpus=1, cpu_max_cores=0.0625)
+		self.assertEqual(vm.cpu_mode, "Relaxed")
+		values = vm._provision_variables()["CGROUP_ARG"]
+		self.assertIn("cpu.weight=6", values)
+		self.assertIn("cpu.max=100000 100000", values)
+
+	def test_hard_cap_mode_emits_ceiling_and_no_weight(self) -> None:
+		# Explicit hard-cap mode gives the original hard ceiling: cpu.max ==
+		# cpu_max_cores, no cpu.weight — a 1/16 VM throttled even on an idle host.
+		vm = _new_vm(vcpus=1, cpu_max_cores=0.0625, cpu_mode="Hard cap")
 		self.assertEqual(vm.cpu_mode, "Hard cap")
 		values = vm._provision_variables()["CGROUP_ARG"]
 		self.assertIn("cpu.max=6250 100000", values)

@@ -147,8 +147,8 @@
    "reqd": 1
   },
   {
-   "default": "Hard cap",
-   "description": "How cpu_max_cores is enforced. Hard cap (default): cpu_max_cores is a hard cgroup cpu.max ceiling — the VM never exceeds its share, even on an idle host. Relaxed: cpu_max_cores becomes a guaranteed share via cpu.weight (the floor under contention) and cpu.max is loosened to vcpus whole cores, so the VM bursts into spare host CPU when the host is idle.",
+   "default": "Relaxed",
+   "description": "How cpu_max_cores is enforced. Relaxed (default): cpu_max_cores becomes a guaranteed share via cpu.weight (the floor under contention) and cpu.max is loosened to vcpus whole cores, so the VM bursts into spare host CPU when the host is idle. Hard cap: cpu_max_cores is a hard cgroup cpu.max ceiling — the VM never exceeds its share, even on an idle host.",
    "fieldname": "cpu_mode",
    "fieldtype": "Select",
    "label": "CPU mode",
