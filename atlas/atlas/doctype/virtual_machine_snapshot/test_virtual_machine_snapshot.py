@@ -447,3 +447,125 @@ class TestVirtualMachineSnapshot(IntegrationTestCase):
 		with patch.object(module, "run_task") as mocked:
 			frappe.delete_doc("Virtual Machine Snapshot", snapshot.name, ignore_permissions=True)
 		mocked.assert_not_called()
+
+
+class TestBuildModeCarry(IntegrationTestCase):
+	"""The bench bake mode (site/admin) rides build VM → snapshot → clone, so a
+	customer VM's first-boot deploy maps its FQDN to the baked site or the admin
+	console. An ordinary VM (no mode) stays empty all the way through."""
+
+	def setUp(self) -> None:
+		from atlas.atlas.doctype.virtual_machine_snapshot import virtual_machine_snapshot as module
+
+		_ensure_test_server()
+		_ensure_test_image()
+		with patch.object(module, "run_task", return_value=fake_task()):
+			for name in frappe.get_all("Virtual Machine Snapshot", pluck="name"):
+				frappe.delete_doc("Virtual Machine Snapshot", name, force=1, ignore_permissions=True)
+		for name in frappe.get_all("Virtual Machine", pluck="name"):
+			frappe.delete_doc("Virtual Machine", name, force=1, ignore_permissions=True)
+
+	def test_snapshot_copies_admin_mode_from_vm(self) -> None:
+		vm = _new_vm(build_mode="admin")
+		vm.db_set("status", "Stopped")
+		vm.reload()
+		snapshot = _make_snapshot(vm)
+		self.assertEqual(snapshot.build_mode, "admin")
+
+	def test_clone_carries_admin_mode(self) -> None:
+		from atlas.atlas.doctype.virtual_machine import virtual_machine as vm_module
+
+		vm = _new_vm(build_mode="admin")
+		vm.db_set("status", "Stopped")
+		vm.reload()
+		snapshot = _make_snapshot(vm)
+		with patch.object(vm_module.frappe, "enqueue"):
+			clone_name = snapshot.clone_to_new_vm(title="admin clone", ssh_public_key="ssh-ed25519 A")
+		clone = frappe.get_doc("Virtual Machine", clone_name)
+		self.assertEqual(clone.build_mode, "admin")
+
+	def test_ordinary_vm_has_no_mode_through_the_chain(self) -> None:
+		from atlas.atlas.doctype.virtual_machine import virtual_machine as vm_module
+
+		vm = _stopped_vm()  # no build_mode
+		self.assertFalse(vm.build_mode)
+		snapshot = _make_snapshot(vm)
+		self.assertFalse(snapshot.build_mode)
+		with patch.object(vm_module.frappe, "enqueue"):
+			clone_name = snapshot.clone_to_new_vm(title="plain clone", ssh_public_key="ssh-ed25519 P")
+		self.assertFalse(frappe.get_doc("Virtual Machine", clone_name).build_mode)
+
+	def test_promote_carries_admin_mode_onto_image_and_vm(self) -> None:
+		# The promote→image path's equivalent of test_clone_carries_admin_mode: an
+		# admin snapshot promotes to an image carrying build_mode=admin, and a VM
+		# created from that image via the ordinary `image` field inherits it (so its
+		# first-boot deploy maps the FQDN to the admin console). spec/08.
+		from atlas.atlas.doctype.virtual_machine import virtual_machine as vm_module
+		from atlas.atlas.doctype.virtual_machine_snapshot import virtual_machine_snapshot as module
+
+		vm = _new_vm(build_mode="admin")
+		vm.db_set("status", "Stopped")
+		vm.reload()
+		snapshot = _make_snapshot(vm)
+		frappe.db.delete("Virtual Machine Image", {"image_name": "promoted-admin"})
+		with patch.object(
+			module,
+			"run_task",
+			return_value=fake_task(
+				stdout='ATLAS_RESULT={"image_lv": "atlas-image-promoted-admin", "size_bytes": 4096}'
+			),
+		):
+			image_name = snapshot.promote_to_image("promoted-admin")
+		self.assertEqual(frappe.db.get_value("Virtual Machine Image", image_name, "build_mode"), "admin")
+		# A VM created from the admin image inherits the mode without restating it.
+		with patch.object(vm_module.frappe, "enqueue"):
+			vm_from_image = frappe.get_doc(
+				{
+					"doctype": "Virtual Machine",
+					"title": "from-admin-image",
+					"server": vm.server,
+					"image": image_name,
+					"vcpus": 1,
+					"memory_megabytes": 512,
+					"disk_gigabytes": frappe.db.get_value(
+						"Virtual Machine Image", image_name, "default_disk_gigabytes"
+					),
+					"ssh_public_key": "ssh-ed25519 A",
+				}
+			).insert(ignore_permissions=True)
+		self.assertEqual(vm_from_image.build_mode, "admin")
+
+	def test_promote_ordinary_snapshot_makes_mode_less_image(self) -> None:
+		# An ordinary (no-mode) snapshot promotes to an image with no build_mode, and a
+		# VM from it stays mode-less (→ site default). The image-inherit path must not
+		# invent a mode where the golden had none.
+		from atlas.atlas.doctype.virtual_machine import virtual_machine as vm_module
+		from atlas.atlas.doctype.virtual_machine_snapshot import virtual_machine_snapshot as module
+
+		snapshot = _make_snapshot(_stopped_vm())
+		frappe.db.delete("Virtual Machine Image", {"image_name": "promoted-plain"})
+		with patch.object(
+			module,
+			"run_task",
+			return_value=fake_task(
+				stdout='ATLAS_RESULT={"image_lv": "atlas-image-promoted-plain", "size_bytes": 4096}'
+			),
+		):
+			image_name = snapshot.promote_to_image("promoted-plain")
+		self.assertFalse(frappe.db.get_value("Virtual Machine Image", image_name, "build_mode"))
+		with patch.object(vm_module.frappe, "enqueue"):
+			vm_from_image = frappe.get_doc(
+				{
+					"doctype": "Virtual Machine",
+					"title": "from-plain-image",
+					"server": snapshot.server,
+					"image": image_name,
+					"vcpus": 1,
+					"memory_megabytes": 512,
+					"disk_gigabytes": frappe.db.get_value(
+						"Virtual Machine Image", image_name, "default_disk_gigabytes"
+					),
+					"ssh_public_key": "ssh-ed25519 P",
+				}
+			).insert(ignore_permissions=True)
+		self.assertFalse(vm_from_image.build_mode)

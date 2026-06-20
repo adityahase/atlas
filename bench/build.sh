@@ -42,8 +42,15 @@ set -euo pipefail
 # Pinned at/after dd14ad4 "Serve sites and admin over IPv6" — that commit makes
 # bench-cli's nginx emit `listen [::]:80` for every site + admin vhost, so the
 # Atlas v6-only inbound path (the proxy/probe reach the VM over its public /128)
-# is served by bench-cli itself. No v6-listener / default_server surgery here. ---
-BENCH_CLI_REF="f36a06c541162aec80dd7b9894ccb4691597b9d3"  # main @ 2026-06-18 (incl. IPv6 listeners dd14ad4)
+# is served by bench-cli itself. No v6-listener / default_server surgery here.
+#
+# BENCH_CLI_REF / ERPNEXT_BRANCH are ENV OVERRIDES: the controller
+# (atlas.atlas.image_builder) exports them per recipe so one committed build.sh
+# bakes any Frappe version (v15 / v16 / nightly). The Frappe branch + Python
+# version are pinned in bench.toml (rendered by the controller before upload).
+# The defaults below keep a direct `build.sh` run (no env) reproducible at v16. ---
+BENCH_CLI_REF="${BENCH_CLI_REF:-f36a06c541162aec80dd7b9894ccb4691597b9d3}"  # default: main @ 2026-06-18 (incl. IPv6 listeners dd14ad4)
+ERPNEXT_BRANCH="${ERPNEXT_BRANCH:-version-16}"  # default: v16; controller overrides for v15 / develop
 
 BENCH_USER="frappe"
 BENCH_HOME="/home/$BENCH_USER"
@@ -162,7 +169,7 @@ if [ "$MODE" = "site" ]; then
 	# background jobs, so Redis must be up: `bench start` brings the production
 	# stack up (its systemd units), which we leave running for the rest of the bake.
 	if [ ! -d "$BENCH_DIR/apps/erpnext" ]; then
-		as_frappe "bench -b '$BENCH_NAME' get-app https://github.com/frappe/erpnext --branch version-16"
+		as_frappe "bench -b '$BENCH_NAME' get-app https://github.com/frappe/erpnext --branch '$ERPNEXT_BRANCH'"
 	fi
 
 	as_frappe "bench -b '$BENCH_NAME' start"
@@ -195,7 +202,21 @@ else
 	as_frappe "bench -b '$BENCH_NAME' start"
 fi
 
-# --- 8. Trim build cruft so golden copies are lean. The stack is LEFT RUNNING.
+# --- 8. Stamp the resolved input commits. The Frappe branch (and ERPNext, and
+# bench-cli's main) can be a MOVING target — `develop` for the nightly variant — so
+# we record the exact commit each app was actually built from on `ATLAS_BUILD_*=`
+# lines. These are captured in the `bench-build` Task's stdout, which the Image
+# Build controller harvests into the build's audit (image_build.run), making even a
+# nightly image traceable to its real inputs. `git -C` is cheap and the repos are
+# right here in the bench. ---
+git_sha() { git -C "$1" rev-parse HEAD 2>/dev/null || echo "unknown"; }
+echo "ATLAS_BUILD_BENCH_CLI_REF=$(git_sha "$BENCH_CLI_DIR")"
+echo "ATLAS_BUILD_FRAPPE_SHA=$(git_sha "$BENCH_DIR/apps/frappe")"
+if [ "$MODE" = "site" ]; then
+	echo "ATLAS_BUILD_ERPNEXT_SHA=$(git_sha "$BENCH_DIR/apps/erpnext")"
+fi
+
+# --- 9. Trim build cruft so golden copies are lean. The stack is LEFT RUNNING.
 # The e2e re-asserts the bake over guest-SSH after the snapshot boots. ---
 apt-get clean
 rm -rf /var/lib/apt/lists/* "$BENCH_HOME/.cache" 2>/dev/null || true

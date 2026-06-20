@@ -163,3 +163,200 @@ def teardown(virtual_machine: str) -> None:
 		vm.terminate()
 		frappe.db.commit()
 		print(f"[teardown] terminated build VM {virtual_machine} (snapshot survives)")
+
+
+# --------------------------------------------------------------------------- #
+# Recipe-driven bake (the real Image Build product path) + admin-URL proof.
+#
+# The functions above bake by hand-rolling a build VM; the ones below drive the
+# actual `Image Build` DocType lifecycle by recipe name — the path an operator's
+# "Bake Image" dialog triggers — then promote and (for an admin recipe) prove the
+# admin console renders end to end from the PROMOTED IMAGE (the customer path):
+# create a VM with `image = <promoted>` → its build_mode is inherited from the
+# image → deploy maps the FQDN to the admin app → curl `/api/status` over v6.
+#
+#     bench --site bootstrap.local execute \
+#         atlas.tests.e2e.use_cases.bench_image.bake_promote_verify_admin \
+#         --kwargs '{"recipe": "bench-v16-admin", "server": "<server>", \
+#                    "fqdn": "v16admin.bootstrap.local"}'
+# --------------------------------------------------------------------------- #
+
+# The stock Ubuntu base the build VM boots from. Unlike _bake's DEFAULT_IMAGE sync,
+# the recipe path takes an explicit base so the caller can point at whatever base
+# image the bake server already carries (bootstrap.local syncs ubuntu-24.04).
+BUILD_BASE_IMAGE = "ubuntu-24.04"
+
+
+def bake_recipe(recipe: str, server: str, base_image: str = BUILD_BASE_IMAGE) -> dict:
+	"""Bake one recipe through the real `Image Build` lifecycle, inline + synchronously.
+
+	Inserts an `Image Build` row (its self-enqueue suppressed so we drive `run()`
+	here, deterministically — the build VM's own boot still goes to the worker, which
+	`run()` polls for) with `terminate_build_vm=False` so the build VM is left for
+	inspection. Returns {"image_build", "build_vm", "snapshot"} once Available.
+
+	auto_register is forced OFF: an admin recipe has no `registers_as`, and we never
+	want a bake driver to silently repoint `default_bench_snapshot`."""
+	from atlas.atlas.doctype.image_build import image_build as ib_module
+
+	print(f"[bake_recipe] recipe={recipe} server={server} base={base_image}")
+	build = _insert_image_build(recipe, server, base_image)
+	# Run the lifecycle inline. run() provisions the build VM (its boot is enqueued to
+	# the worker), waits for Running, uploads the tree + runs build.sh, stops, snapshots.
+	# It commits at each transition. The worker may ALSO have picked up a stray enqueue;
+	# run()'s Draft-guard makes the loser a no-op, but we suppressed the enqueue at
+	# insert (below) so there is no stray. We do NOT patch enqueue here — run() needs
+	# the VM's after_insert auto_provision to reach the worker.
+	ib_module.run(build.name)
+	build.reload()
+	if build.status != "Available":
+		raise AssertionError(f"bake of {recipe} ended {build.status}: {(build.error or '')[:500]}")
+	print(
+		f"[bake_recipe] {recipe} Available — build_vm={build.build_virtual_machine} snapshot={build.snapshot}"
+	)
+	return {
+		"image_build": build.name,
+		"build_vm": build.build_virtual_machine,
+		"snapshot": build.snapshot,
+	}
+
+
+def _insert_image_build(recipe: str, server: str, base_image: str):
+	"""Insert an Image Build row with its self-enqueue suppressed (we run() inline)."""
+	from unittest.mock import patch
+
+	from atlas.atlas.doctype.image_build import image_build as ib_module
+
+	# Suppress ONLY the Image Build's own after_insert run-enqueue, so the worker
+	# doesn't race our inline run(). Scoped to the insert; the VM boot enqueued later
+	# (inside run) is unaffected.
+	with patch.object(ib_module.frappe, "enqueue"):
+		build = frappe.get_doc(
+			{
+				"doctype": "Image Build",
+				"recipe": recipe,
+				"server": server,
+				"base_image": base_image,
+				"auto_register": 0,
+				"terminate_build_vm": 0,
+			}
+		).insert(ignore_permissions=True)
+	frappe.db.commit()
+	return build
+
+
+def promote_build(image_build: str) -> str:
+	"""Promote a finished bake's snapshot into its series base image and return the
+	image name. Thin wrapper over Image Build.promote (which defaults the image name to
+	the recipe's `promote_image_name`, e.g. `bench-v16-admin`)."""
+	build = frappe.get_doc("Image Build", image_build)
+	image_name = build.promote()
+	frappe.db.commit()
+	print(f"[promote_build] {image_build} → image {image_name}")
+	return image_name
+
+
+def verify_admin_url(image_name: str, server: str, fqdn: str) -> dict:
+	"""Create a VM from a promoted ADMIN image, deploy it, and prove the admin console
+	renders at the FQDN — the customer path end to end.
+
+	The VM is created with only `image = <promoted admin image>`; its build_mode is
+	INHERITED from the image (set_build_mode_default), so deploy_site passes
+	`--mode admin` without us restating it. We then probe the admin app's `/api/status`
+	(200, unauthenticated — the admin console is Flask, no Frappe ping route) over the
+	VM's public v6 /128, and fetch `/` to confirm the console HTML renders.
+
+	Returns a dict with the VM name, the inherited build_mode, and the two probe
+	results. Leaves the VM Running for inspection."""
+	from atlas.atlas.deploy_site import deploy_site, readiness_path_for_mode, wait_for_http
+
+	ssh_public_key = ephemeral_public_key() + "\n" + control_plane_public_key()
+	default_disk = frappe.db.get_value("Virtual Machine Image", image_name, "default_disk_gigabytes")
+	vm = frappe.get_doc(
+		{
+			"doctype": "Virtual Machine",
+			"title": f"{fqdn} (admin from {image_name})",
+			"server": server,
+			"image": image_name,
+			"vcpus": 2,
+			"memory_megabytes": GOLDEN_MEMORY_MB,
+			"disk_gigabytes": default_disk,
+			"ssh_public_key": ssh_public_key,
+		}
+	).insert(ignore_permissions=True)
+	frappe.db.commit()
+	# The product assertion: a VM from an admin image is admin without anyone saying so.
+	assert vm.build_mode == "admin", f"VM did not inherit admin mode from the image: {vm.build_mode!r}"
+	print(f"[verify_admin_url] VM {vm.name} build_mode={vm.build_mode} v6={vm.ipv6_address}")
+
+	wait_for_vm_running(vm.name, timeout_seconds=1500, poll_seconds=5)
+	vm.reload()
+	assert vm.status == "Running", vm.status
+
+	# Deploy: maps the FQDN to the admin app ([admin].domain = <fqdn> + setup nginx).
+	print(f"[verify_admin_url] deploying {fqdn} in admin mode …")
+	deploy_site(vm.name, fqdn)
+
+	# Probe the admin readiness path over the public v6 path (mode-aware = /api/status).
+	path = readiness_path_for_mode("admin")
+	print(f"[verify_admin_url] waiting for admin {path} on [{vm.ipv6_address}] (Host: {fqdn}) …")
+	wait_for_http(vm.ipv6_address, fqdn, path=path, timeout_seconds=300)
+
+	status = _curl_admin(vm.ipv6_address, fqdn, path)
+	root = _curl_admin(vm.ipv6_address, fqdn, "/")
+	summary = {
+		"vm": vm.name,
+		"vm_ipv6": vm.ipv6_address,
+		"build_mode": vm.build_mode,
+		"fqdn": fqdn,
+		"status_probe": status,
+		"root_probe": root,
+	}
+	print("")
+	print("=" * 64)
+	print(f"ADMIN URL RENDERS — http://{fqdn}/  (over v6 [{vm.ipv6_address}])")
+	for key, value in summary.items():
+		print(f"  {key:<14} {value}")
+	print("=" * 64)
+	return summary
+
+
+def _curl_admin(ipv6_address: str, host_header: str, path: str) -> dict:
+	"""Fetch one admin URL over the VM's public v6 /128 from the controller host and
+	return {http_code, content_type, snippet}. The admin app listens on :80 inside the
+	guest behind nginx; the controller reaches the /128 over the public v6 internet
+	(VMs are v6-inbound-only). Uses the system curl (already a controller dep)."""
+	import subprocess
+
+	url = f"http://[{ipv6_address}]:80{path}"
+	result = subprocess.run(
+		[
+			"curl",
+			"-s",
+			"-m",
+			"20",
+			"-H",
+			f"Host: {host_header}",
+			"-w",
+			"\n__HTTP__%{http_code}__CT__%{content_type}",
+			url,
+		],
+		capture_output=True,
+		text=True,
+	)
+	body, _, meta = result.stdout.rpartition("\n__HTTP__")
+	code, _, content_type = meta.partition("__CT__")
+	snippet = body.strip()[:200]
+	probe = {"url": url, "http_code": code, "content_type": content_type, "snippet": snippet}
+	print(f"[curl] {path} → {code} ({content_type}) {snippet[:100]!r}")
+	return probe
+
+
+def bake_promote_verify_admin(recipe: str, server: str, fqdn: str) -> dict:
+	"""End-to-end admin proof for one recipe: bake → promote → create-VM-from-image →
+	deploy → confirm the admin URL renders. The single entrypoint for the operator's
+	turn (see module docstring). Leaves the build VM and the admin VM Running."""
+	baked = bake_recipe(recipe, server)
+	image_name = promote_build(baked["image_build"])
+	verified = verify_admin_url(image_name, server, fqdn)
+	return {"recipe": recipe, "image": image_name, **baked, "verify": verified}

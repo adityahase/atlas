@@ -4,8 +4,10 @@ INSIDE a plain guest over SSH, then snapshotting it.
 This is the controller side of the golden bench image (spec/08-images.md). The
 build itself — upload the committed `bench/` tree, run `build.sh` over guest-SSH
 detached, record a Task, fail loud — is the shared `image_builder.run_build` seam;
-`build_bench` is the thin wrapper that hands it the `bench` recipe
-(`image_recipes.RECIPES["bench"]`). The full provision→build→stop→snapshot→register
+`build_bench` is the thin wrapper that hands it the `bench` recipe — now a
+back-compat alias `get_recipe("bench") → RECIPES["bench-v16"]` (the current line;
+the single `bench` recipe split into versioned variants, image_recipes.py). The
+full provision→build→stop→snapshot→register
 lifecycle around it lives in the `Image Build` DocType.
 
 That snapshot is the reusable "golden bench image" — a VM with bench-cli, the uv

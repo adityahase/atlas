@@ -38,18 +38,22 @@ function add_buttons(frm) {
 }
 
 function open_promote_dialog(frm) {
-	const default_name = `${frm.doc.recipe}-${frm.doc.name}`.toLowerCase();
 	const dialog = new frappe.ui.Dialog({
 		title: __("Promote {0} to a base image", [frm.doc.title]),
 		fields: [
 			{
+				// Left BLANK on purpose: an empty name lets the server apply the
+				// recipe's default — for a versioned bench recipe that is the SERIES
+				// name (bench-v15 / bench-v16 / bench-nightly), the exact name the
+				// Central Image catalog links by (spec/16). Pre-filling the old
+				// <recipe>-<build> slug here would override that and orphan the
+				// Central Image at Expected. Fill this only to override the default.
 				fieldname: "image_name",
-				label: __("Image name"),
+				label: __("Image name (optional)"),
 				fieldtype: "Data",
-				reqd: 1,
-				default: default_name,
+				default: "",
 				description: __(
-					"Lowercase letters, digits, dots and dashes. Becomes the image record name and the on-host LV (atlas-image-<name>)."
+					"Leave blank to use the recipe's default (the series name for a bench variant, e.g. bench-v16). Override with lowercase letters, digits, dots and dashes — it becomes the image record name and the on-host LV (atlas-image-<name>)."
 				),
 			},
 			{ fieldname: "title", label: __("Title"), fieldtype: "Data", default: frm.doc.title },

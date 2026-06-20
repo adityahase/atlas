@@ -283,7 +283,16 @@ def _set_admin_domain(fqdn: str) -> None:
 	_bench("setup", "nginx")
 
 
-def _serving(host_header: str) -> bool:
+# The local readiness path, per bake mode. site mode serves a Frappe site whose
+# built-in unauthenticated `/api/method/ping` returns 200; admin mode serves the
+# bench-cli admin console — a FLASK app with NO `/api/method/ping` (it would 404),
+# whose unauthenticated health endpoint is `/api/status` (admin/backend app.py
+# `_OPEN_PATHS`). Kept in lockstep with the controller's deploy_site.READINESS_PATH /
+# readiness_path_for_mode.
+_HEALTH_PATH = {"site": "/api/method/ping", "admin": "/api/status"}
+
+
+def _serving(host_header: str, mode: str) -> bool:
 	"""Best-effort in-guest confirmation that the front door answers locally before
 	we report serving. The controller's wait_for_http is the authoritative gate
 	(Contract B, end-to-end over the real network); this is a fast local sanity
@@ -292,11 +301,13 @@ def _serving(host_header: str) -> bool:
 	Probe over **IPv6** (`[::1]`) AND v4 — the edge proxy reaches the VM over its
 	public /128, so a v6 200 proves the path that matters is wired. The Host header
 	is the FQDN (Contract A); in site mode the multitenant gunicorn resolves the
-	renamed site from it, in admin mode nginx routes it to the admin app."""
-	return _local_ping(host_header, "[::1]") and _local_ping(host_header, "127.0.0.1")
+	renamed site from it, in admin mode nginx routes it to the admin app. The health
+	PATH is mode-aware (the admin app has no Frappe ping route)."""
+	path = _HEALTH_PATH.get(mode, _HEALTH_PATH["site"])
+	return _local_ping(host_header, "[::1]", path) and _local_ping(host_header, "127.0.0.1", path)
 
 
-def _local_ping(site_name: str, host_ip: str) -> bool:
+def _local_ping(site_name: str, host_ip: str, path: str) -> bool:
 	try:
 		out = subprocess.run(
 			[
@@ -309,7 +320,7 @@ def _local_ping(site_name: str, host_ip: str) -> bool:
 				"%{http_code}",
 				"-H",
 				f"Host: {site_name}",
-				f"http://{host_ip}:80/api/method/ping",
+				f"http://{host_ip}:80{path}",
 			],
 			text=True,
 			capture_output=True,
@@ -395,7 +406,7 @@ def main() -> None:
 		log("nginx vhost regenerated + reloaded")
 
 	log("local serving probe (v6 + v4) …")
-	serving = _serving(inputs.site_name)
+	serving = _serving(inputs.site_name, inputs.mode)
 	log(f"deploy complete (serving={serving})")
 	result = DeploySiteResult(site=inputs.site_name, serving=serving)
 	result.emit()

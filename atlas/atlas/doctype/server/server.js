@@ -147,9 +147,9 @@ function open_sync_image_dialog(frm) {
 
 // Bake a golden bench / proxy image: insert an Image Build row on this server.
 // The row's after_insert enqueues the provision->build->snapshot job; we route
-// to its form, whose live checklist shows the bake progress. Recipe choices come
-// from atlas.atlas.image_recipes.RECIPES; region is only relevant to the proxy
-// recipe (which fixes a region).
+// to its form, whose live checklist shows the bake progress. Recipe choices mirror
+// atlas.atlas.image_recipes.recipe_names() (the versioned bench variants + proxy);
+// region is only relevant to the proxy recipe (which fixes a region).
 function open_bake_image_dialog(frm) {
 	const dialog = new frappe.ui.Dialog({
 		title: __("Bake Image"),
@@ -158,8 +158,21 @@ function open_bake_image_dialog(frm) {
 				fieldname: "recipe",
 				label: __("Recipe"),
 				fieldtype: "Select",
-				options: ["bench", "proxy"],
-				default: "bench",
+				// Kept in lockstep with image_recipes.recipe_names() / the Image Build
+				// `recipe` Select options. bench-v16 is the current line; the -admin
+				// variants bake the bench-cli admin console (no site); the back-compat
+				// `bench` alias is intentionally NOT an option (the operator picks an
+				// explicit version, and a stored `bench` would fail the Select validation).
+				options: [
+					"bench-v16",
+					"bench-v15",
+					"bench-nightly",
+					"bench-v16-admin",
+					"bench-v15-admin",
+					"bench-nightly-admin",
+					"proxy",
+				],
+				default: "bench-v16",
 				reqd: 1,
 			},
 			{

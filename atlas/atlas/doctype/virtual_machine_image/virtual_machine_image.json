@@ -14,6 +14,7 @@
   "is_active",
   "tenant",
   "default_disk_gigabytes",
+  "build_mode",
   "section_break_image_data",
   "section_break_kernel",
   "kernel_url",
@@ -75,6 +76,15 @@
    "in_list_view": 1,
    "label": "Default Disk (GB)",
    "reqd": 1,
+   "set_only_once": 1
+  },
+  {
+   "description": "Bench bake mode this image carries (set on a promoted bench golden). A VM created from this image inherits it as its build_mode, so its first-boot deploy maps the FQDN to the baked site (site) or the bench-cli admin console (admin). Empty for an ordinary base image — treated as site everywhere it is read.",
+   "fieldname": "build_mode",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Build Mode",
+   "options": "\nsite\nadmin",
    "set_only_once": 1
   },
   {

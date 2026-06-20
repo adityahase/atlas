@@ -14,6 +14,7 @@
   "column_break_header",
   "status",
   "tenant",
+  "build_mode",
   "section_break_disk",
   "source_image",
   "disk_gigabytes",
@@ -90,6 +91,16 @@
    "in_standard_filter": 1,
    "label": "Tenant",
    "options": "Tenant",
+   "set_only_once": 1
+  },
+  {
+   "description": "For a golden bench snapshot, the bench bake mode the build VM was in: site (a baked site.local, renamed to the FQDN on first boot) or admin (bench + admin app only, the FQDN maps to the admin console). Carried from the build VM and onto a clone, where deploy-site.py reads it. Empty for a non-bench snapshot, treated as site.",
+   "fieldname": "build_mode",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Build Mode",
+   "options": "\nsite\nadmin",
+   "read_only": 1,
    "set_only_once": 1
   },
   {

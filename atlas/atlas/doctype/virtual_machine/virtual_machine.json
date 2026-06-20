@@ -30,6 +30,7 @@
   "clone_source_rootfs",
   "clone_source_data_rootfs",
   "warm_snapshot",
+  "build_mode",
   "section_break_security",
   "ssh_public_key",
   "ssh_command",
@@ -228,6 +229,17 @@
    "label": "Warm Snapshot",
    "no_copy": 1,
    "options": "Virtual Machine Snapshot",
+   "read_only": 1,
+   "set_only_once": 1
+  },
+  {
+   "description": "Internal: the bench bake mode (site or admin) of the snapshot this VM clones from. Threaded snapshot → clone → first-boot deploy so the FQDN maps to the baked site (site) or the admin console (admin). Empty for an ordinary image-backed VM, treated as site.",
+   "fieldname": "build_mode",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Build Mode",
+   "no_copy": 1,
+   "options": "\nsite\nadmin",
    "read_only": 1,
    "set_only_once": 1
   },

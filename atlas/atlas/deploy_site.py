@@ -51,14 +51,32 @@ DEPLOY_SCRIPT_NAME = "deploy-site.py"
 # contract, inlined in the guest script because the guest has no Atlas package).
 RESULT_MARKER = "ATLAS_RESULT="
 
-# Readiness probe (Contract B). `/api/method/ping` is Frappe's built-in
-# unauthenticated whitelisted method: it returns 200 `{"message":"pong"}` once the
-# web server is up AND the site DB resolves for the Host header — an honest "Frappe
-# is serving THIS site" signal that does NOT depend on the setup-wizard state (the
-# wizard only gates `/`, not the API). Probed for the FQDN Host header (Contract A)
-# so multitenant routing is exercised, not just "some site answers".
-READINESS_PATH = "/api/method/ping"
+# Readiness probe (Contract B). The path is MODE-AWARE, because the two bake modes
+# serve two different apps behind the FQDN:
+#
+#   * site  — `/api/method/ping` is Frappe's built-in unauthenticated whitelisted
+#             method: 200 `{"message":"pong"}` once the web server is up AND the site
+#             DB resolves for the Host header — an honest "Frappe is serving THIS site"
+#             signal that does NOT depend on the setup-wizard state (the wizard gates
+#             `/`, not the API). Probed for the FQDN Host header (Contract A) so
+#             multitenant routing is exercised, not just "some site answers".
+#   * admin — the admin console is a FLASK app, not a Frappe site, so it has NO
+#             `/api/method/ping` (that would 404 forever). `/api/status` is the
+#             admin app's unauthenticated health endpoint (bench-cli admin/backend
+#             app.py `_OPEN_PATHS` + `@app.route("/api/status")`, 200 unauthenticated);
+#             the `_admin.conf` vhost proxies `location /` to the admin gunicorn, so
+#             nginx routes `/api/status` straight through.
+READINESS_PATH = "/api/method/ping"  # site mode (back-compat default for callers passing no path)
+_READINESS_PATH_FOR_MODE = {"site": "/api/method/ping", "admin": "/api/status"}
 READINESS_TIMEOUT_SECONDS = 600
+
+
+def readiness_path_for_mode(build_mode: str | None) -> str:
+	"""The HTTP readiness path for a bench bake mode. Empty/None/unknown → site (the
+	harmless default — every ordinary VM and every site-mode golden uses it)."""
+	return _READINESS_PATH_FOR_MODE.get((build_mode or "site"), READINESS_PATH)
+
+
 # Initial poll, then geometric backoff to READINESS_MAX_POLL_SECONDS. A warm clone
 # is already serving and answers the first probe (or within a second of the web
 # restart settling), so a tight initial poll shaves up to ~5s of pure granularity
@@ -132,17 +150,26 @@ def deploy_site(virtual_machine: str, site_name: str) -> None:
 		# shebang is enough, but the deploy script needs the system python (it drops to
 		# the `frappe` user and shells out to the baked bench-cli, which owns its own uv
 		# venv). Warm: rename + `setup nginx` + reload + probe (fast — no restart). Cold:
-		# also an idempotent `bench start` first. The deploy script defaults to site
-		# mode (--mode site); admin-mode wiring (--mode admin) is a follow-up that reads
-		# the mode from the cloned golden snapshot.
+		# also an idempotent `bench start` first.
 		command = f"python3 {shlex.quote(remote_script)} --site-name {shlex.quote(site_name)}"
+		# The bake MODE is carried on the cloned VM (build_mode, set by
+		# clone_to_new_vm from the golden snapshot). site → rename the baked
+		# `site.local` to the FQDN; admin → set `[admin].domain = <fqdn>`. Empty
+		# (an ordinary clone, or a pre-build_mode golden) defaults to site, so the
+		# `--mode` flag is only passed when it is explicitly admin — keeping the
+		# command identical to before for every existing site-mode deploy.
+		build_mode = vm.build_mode or "site"
+		if build_mode == "admin":
+			command += " --mode admin"
 		# A warm-restored clone (resumed from a golden memory snapshot, not
 		# booted): the deploy gates on the in-guest identity freshen having
 		# completed for THIS VM before it renames the site — see deploy-site.py's
 		# --warm-vm-uuid.
 		if vm.warm_snapshot:
 			command += f" --warm-vm-uuid {shlex.quote(vm.name)}"
-		_trace(f"running deploy-site.py in guest ({'warm' if vm.warm_snapshot else 'cold'} path) …")
+		_trace(
+			f"running deploy-site.py in guest ({'warm' if vm.warm_snapshot else 'cold'}, mode={build_mode}) …"
+		)
 		_t = time.monotonic()
 		stdout, stderr, code = run_ssh(connection, key_path, command, timeout_seconds=1800)
 		_trace(f"in-guest deploy-site.py returned (exit {code})", since=_t)

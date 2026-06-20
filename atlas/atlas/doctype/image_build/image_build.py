@@ -100,14 +100,25 @@ class ImageBuild(Document):
 
 		A thin delegate to `Virtual Machine Snapshot.promote_to_image`: the warm
 		reject and every guard live once, in the snapshot method, so a warm bake's
-		Image Build surfaces the same clean error. Defaults the image name to a slug
-		derived from this build (`<recipe>-<build name>`, lowercased) — unique
-		because build names are. Returns the new image's name."""
+		Image Build surfaces the same clean error.
+
+		The default image NAME is the load-bearing link to the Central Image catalog
+		(spec/16): Central's `upsert_central_images` links a `Central Image` to a
+		`Virtual Machine Image` of the EXACT same name (`central.py` name-match), so a
+		versioned bench recipe defaults its promoted image to the series name it pins
+		(`recipe.promote_image_name` = `bench-v15` / `bench-v16` / `bench-nightly`).
+		Promote that, run Fetch Images, and the matching Central Image flips to Baked
+		and links it — customers then pick the version through the ordinary VM `image`
+		field. A recipe with no series name (proxy, a one-off bench) falls back to the
+		old `<recipe>-<build name>` slug — unique because build names are. An explicit
+		`image_name` always wins. Returns the new image's name."""
 		if self.status != "Available":
 			frappe.throw(f"Can only promote an Available build (status is {self.status})")
 		if not self.snapshot:
 			frappe.throw("This build has no snapshot to promote.")
-		image_name = (image_name or "").strip() or f"{self.recipe}-{self.name}".lower()
+		recipe = get_recipe(self.recipe)
+		default_name = recipe.promote_image_name or f"{self.recipe}-{self.name}".lower()
+		image_name = (image_name or "").strip() or default_name
 		snapshot = frappe.get_doc("Virtual Machine Snapshot", self.snapshot)
 		return snapshot.promote_to_image(image_name=image_name, title=title or self.title)
 
@@ -144,6 +155,11 @@ def run(image_build_name: str) -> None:
 		# Link the build Task for the audit trail — set even on a failed build
 		# (on_task fires before run_build throws).
 		run_build(vm_name, recipe, on_task=lambda task_name: build.db_set("build_task", task_name))
+		# Harvest the resolved input commits build.sh stamped (ATLAS_BUILD_*= lines in
+		# the build Task's stdout) into the build's audit — chiefly so a nightly image,
+		# whose develop branches float, is traceable to the exact frappe/erpnext SHAs
+		# it baked. Best-effort: a parse miss never fails the bake.
+		_record_build_inputs(build)
 		_set_status(build, "Snapshotting")
 		if build.warm:
 			snapshot_name = _warm_snapshot(build, recipe, vm_name)
@@ -208,6 +224,10 @@ def _provision_build_vm(build, recipe) -> str:
 			"ssh_public_key": ssh_public_key,
 			"is_proxy": 1 if recipe.is_proxy else 0,
 			"region": build.region if recipe.is_proxy else None,
+			# Stamp the bake mode (bench recipes only; empty for proxy). It rides the
+			# build VM → its snapshot → a clone, so a customer VM's first boot maps its
+			# FQDN to the baked site (site) or the admin console (admin) — spec/08.
+			"build_mode": recipe.build_mode or None,
 		}
 	).insert(ignore_permissions=True)
 	return vm.name
@@ -268,6 +288,9 @@ def _warm_snapshot(build, recipe, vm_name: str) -> str:
 			"kind": "Warm",
 			"source_image": vm.image,
 			"disk_gigabytes": vm.disk_gigabytes,
+			# Carry the bench bake mode (a warm v16 golden is site mode) so a warm
+			# clone's first-boot deploy maps the FQDN correctly (spec/08).
+			"build_mode": vm.build_mode or None,
 			# The frozen vmstate pins the machine and its tap name; a warm clone
 			# must reproduce all three exactly (clone_to_new_vm enforces it).
 			"vcpus": vm.vcpus,
@@ -351,6 +374,28 @@ def _supersede_warm_snapshots(snapshot) -> None:
 		if name == registered:
 			continue
 		frappe.delete_doc("Virtual Machine Snapshot", name, ignore_permissions=True, force=1)
+
+
+def _record_build_inputs(build) -> None:
+	"""Parse the `ATLAS_BUILD_*=` lines build.sh stamped into the build Task's stdout
+	(the resolved frappe / erpnext / bench-cli commit SHAs) and stash them as JSON on
+	`build_inputs`. Traceability for the nightly variant above all — its develop
+	branches float, so the SHAs are the only record of what a given image really is.
+
+	Best-effort: no build Task, no stamp lines, or a stdout that can't be read just
+	leaves build_inputs empty. This is an audit nicety, never a reason to fail a bake
+	that otherwise succeeded."""
+	if not build.build_task:
+		return
+	stdout = frappe.db.get_value("Task", build.build_task, "stdout") or ""
+	inputs = {}
+	for line in stdout.splitlines():
+		line = line.strip()
+		if line.startswith("ATLAS_BUILD_") and "=" in line:
+			key, _, value = line.partition("=")
+			inputs[key[len("ATLAS_BUILD_") :].lower()] = value.strip()
+	if inputs:
+		build.db_set("build_inputs", frappe.as_json(inputs))
 
 
 def _register(recipe, snapshot_name: str) -> None:

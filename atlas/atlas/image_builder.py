@@ -14,8 +14,11 @@ the second SSH target type, spec/04), not onto a Server — the same path the pr
 control plane uses.
 """
 
+import os
 import shlex
+import tempfile
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 
 import frappe
@@ -24,6 +27,13 @@ from atlas.atlas._ssh.transport import forget_host, run_detached, run_scp, run_s
 from atlas.atlas.image_recipes import ImageRecipe
 from atlas.atlas.proxy import _record_guest_task, _remote_parent
 from atlas.atlas.ssh import connection_for_guest
+
+# The committed bench.toml the bench recipes render per-version. Its `[bench] python`
+# and the `frappe` app's `[[apps]] branch` are the only lines that vary between
+# v15/v16/nightly; everything else (production shape, MariaDB, Redis, ZFS) is the
+# proven invariant. A recipe whose source tree has no bench.toml (proxy) renders
+# nothing — _render_bench_toml returns None and the verbatim upload stands.
+BENCH_TOML_NAME = "bench.toml"
 
 
 def _source_directory(recipe: ImageRecipe) -> Path:
@@ -51,6 +61,103 @@ def tree_uploads(recipe: ImageRecipe) -> list[tuple[Path, str]]:
 	return uploads
 
 
+def _render_bench_toml(recipe: ImageRecipe) -> str | None:
+	"""Render the committed `bench/bench.toml` for this recipe's version pins, or
+	None if the recipe pins nothing (proxy, or a future bench recipe that wants the
+	committed default verbatim).
+
+	Stdlib only — line-targeted substitution, no Jinja2 (a template format would
+	clash with TOML's own `{ }` and add a dependency for two lines). We rewrite:
+
+	  * `[bench] python = "<X>"`     ← recipe.python_version
+	  * the `frappe` app's `[[apps]] branch = "<X>"`   ← recipe.frappe_branch
+
+	The branch edit is SECTION-AWARE: bench.toml can carry more than one `[[apps]]`
+	block (each with its own `branch`), so we only touch the `branch` line inside the
+	block whose `name = "frappe"` — never a sibling app's branch. ERPNext's branch is
+	NOT in bench.toml (build.sh clones ERPNext with `get-app --branch`), so it rides
+	the ERPNEXT_BRANCH env override instead (see _build_env). Fails loud if a targeted
+	line is missing — a silent no-op would bake the wrong version."""
+	if not (recipe.frappe_branch or recipe.python_version):
+		return None
+	toml_path = _source_directory(recipe) / BENCH_TOML_NAME
+	if not toml_path.exists():
+		frappe.throw(f"Recipe {recipe.name} pins a version but {toml_path} has no bench.toml to render")
+	lines = toml_path.read_text().splitlines(keepends=True)
+
+	current_table = ""  # the most recent [table] / [[array.table]] header seen
+	in_frappe_app = False  # are we inside the `frappe` [[apps]] block?
+	python_done = branch_done = False
+	out: list[str] = []
+	for line in lines:
+		stripped = line.strip()
+		if stripped.startswith("["):
+			current_table = stripped
+			# A new [[apps]] block resets the frappe flag; we set it true only once we
+			# see this block's `name = "frappe"` line below.
+			in_frappe_app = False
+		elif current_table == "[[apps]]" and stripped.startswith("name"):
+			in_frappe_app = '"frappe"' in stripped or "'frappe'" in stripped
+		if recipe.python_version and current_table == "[bench]" and _is_key(stripped, "python"):
+			out.append(_set_string_key(line, "python", recipe.python_version))
+			python_done = True
+			continue
+		if recipe.frappe_branch and in_frappe_app and _is_key(stripped, "branch"):
+			out.append(_set_string_key(line, "branch", recipe.frappe_branch))
+			branch_done = True
+			continue
+		out.append(line)
+
+	if recipe.python_version and not python_done:
+		frappe.throw(f"bench.toml has no [bench].python line to pin for recipe {recipe.name}")
+	if recipe.frappe_branch and not branch_done:
+		frappe.throw(f"bench.toml has no frappe [[apps]].branch line to pin for recipe {recipe.name}")
+	return "".join(out)
+
+
+def _is_key(stripped_line: str, key: str) -> bool:
+	"""True if a stripped TOML line assigns `key` (`key = …`), not a comment or a
+	different key that happens to start with the same letters (`python_path`)."""
+	if stripped_line.startswith("#"):
+		return False
+	head = stripped_line.split("=", 1)[0].strip() if "=" in stripped_line else ""
+	return head == key
+
+
+def _set_string_key(line: str, key: str, value: str) -> str:
+	"""Rewrite a `key = "old"` line to `key = "<value>"`, preserving the leading
+	indentation and the trailing newline (an inline `# comment` is dropped — none of
+	the targeted lines carry one)."""
+	indent = line[: len(line) - len(line.lstrip())]
+	newline = "\n" if line.endswith("\n") else ""
+	return f'{indent}{key} = "{value}"{newline}'
+
+
+def _build_env(recipe: ImageRecipe) -> dict[str, str]:
+	"""The env overrides build.sh reads (it defaults each when unset, so a direct
+	`build.sh` run with no env stays reproducible). bench-cli ref + ERPNext branch
+	are env, not bench.toml: the ref is install.sh's checkout target and the ERPNext
+	branch is a `get-app --branch` arg, neither of which lives in bench.toml."""
+	env: dict[str, str] = {}
+	if recipe.bench_cli_ref:
+		env["BENCH_CLI_REF"] = recipe.bench_cli_ref
+	if recipe.erpnext_branch:
+		env["ERPNEXT_BRANCH"] = recipe.erpnext_branch
+	return env
+
+
+def _build_command(recipe: ImageRecipe) -> str:
+	"""The detached build command: export the version env, make the entrypoint
+	executable, then run it with the bake MODE as its positional arg. The whole
+	remote command string is caller-controlled (run_detached just wraps it in
+	setsid+nohup), so the version pins ride here — build.sh needs no new arg-parsing
+	beyond MODE, which it already has."""
+	env = _build_env(recipe)
+	prefix = "".join(f"export {k}={shlex.quote(v)} && " for k, v in env.items())
+	entry = recipe.remote_entrypoint
+	return f"{prefix}chmod +x {entry} && {entry} {shlex.quote(recipe.effective_build_mode)}"
+
+
 def run_build(
 	virtual_machine: str, recipe: ImageRecipe, on_task: Callable[[str], None] | None = None
 ) -> None:
@@ -66,23 +173,28 @@ def run_build(
 	retry = re-run), so this doubles as the re-bake verb."""
 	vm = frappe.get_doc("Virtual Machine", virtual_machine)
 	connection = connection_for_guest(vm)
-	uploads = tree_uploads(recipe)
 	# Freshly-provisioned VM, possibly on a recycled IP whose old host key we
 	# pinned. This path goes straight to run_scp/run_ssh (no wait_for_ssh), so
 	# accept-new never re-pins a CHANGED key — drop the stale entry first or the
 	# first scp hard-fails "REMOTE HOST IDENTIFICATION HAS CHANGED"
 	# (real-provision-traps #1).
 	forget_host(connection.host)
-	with ssh_key_file(connection.ssh_private_key) as key_path:
+	# ExitStack owns the rendered-bench.toml temp file: it must stay on disk across
+	# the whole _stage_tree (which scp's it), and be unlinked on the way out whether
+	# the build succeeds or throws — hence the stack, not a bare `with tempfile`.
+	with ExitStack() as stack:
+		uploads = _uploads_with_rendered_toml(recipe, stack)
+		key_path = stack.enter_context(ssh_key_file(connection.ssh_private_key))
 		_stage_tree(connection, key_path, uploads)
 		# Run the build (long: apt + clone + uv for bench; nginx + luajit compile
 		# for proxy) DETACHED, so a connection reset mid-build doesn't SIGHUP it.
 		# The shared run_detached helper owns the setsid+nohup + marker-poll
-		# mechanics; we hand it the entrypoint and its own log/done paths.
+		# mechanics; we hand it the entrypoint (with the version env + bake mode)
+		# and its own log/done paths.
 		stdout, stderr, code = run_detached(
 			connection,
 			key_path,
-			f"chmod +x {recipe.remote_entrypoint} && {recipe.remote_entrypoint}",
+			_build_command(recipe),
 			log_path=recipe.build_log_path,
 			done_path=recipe.build_done_path,
 		)
@@ -98,6 +210,34 @@ def run_build(
 		on_task(task_name)
 	if code != 0:
 		frappe.throw(f"{recipe.title} build on {virtual_machine} failed (exit {code}): {stderr[-500:]}")
+
+
+def _uploads_with_rendered_toml(recipe: ImageRecipe, stack: ExitStack) -> list[tuple[Path, str]]:
+	"""The recipe's tree uploads, with the committed bench.toml swapped for a rendered
+	temp file when the recipe pins a version. The temp file is registered with `stack`
+	so it is unlinked when run_build's ExitStack closes (after staging, success or
+	throw). A recipe that renders nothing (proxy) uploads its tree verbatim.
+
+	Fails loud if the recipe pins a version but its tree carries no bench.toml entry
+	to swap — a silent skip would scp the wrong (unpinned) config and bake the wrong
+	version, the exact footgun this guard prevents."""
+	uploads = tree_uploads(recipe)
+	rendered = _render_bench_toml(recipe)
+	if rendered is None:
+		return uploads
+	remote_toml = f"{recipe.remote_directory}/{BENCH_TOML_NAME}"
+	index = next((i for i, (_, remote) in enumerate(uploads) if remote == remote_toml), None)
+	if index is None:
+		frappe.throw(
+			f"Recipe {recipe.name} renders a versioned bench.toml but its tree has no "
+			f"{BENCH_TOML_NAME} upload to swap (expected remote {remote_toml})"
+		)
+	handle = tempfile.NamedTemporaryFile("w", suffix=f"-{BENCH_TOML_NAME}", delete=False)
+	handle.write(rendered)
+	handle.close()
+	stack.callback(lambda: os.unlink(handle.name))
+	uploads[index] = (Path(handle.name), remote_toml)
+	return uploads
 
 
 def _stage_tree(connection, key_path, uploads: list[tuple[Path, str]]) -> None:

@@ -185,6 +185,47 @@ class TestDeploySite(IntegrationTestCase):
 			)
 		)
 
+	def test_site_mode_vm_passes_no_mode_flag(self) -> None:
+		# An ordinary (site / no build_mode) clone deploys exactly as before — no
+		# `--mode` flag, so the command is byte-identical to the pre-mode path.
+		vm_name = self._make_backing_vm()
+		with (
+			patch.object(deploy_module, "run_ssh", return_value=("ATLAS_RESULT={}", "", 0)) as m_ssh,
+			patch.object(deploy_module, "run_scp"),
+			patch.object(deploy_module, "wait_for_ssh"),
+		):
+			deploy_module.deploy_site(vm_name, "acme.blr1.frappe.dev")
+		self.assertNotIn("--mode", m_ssh.call_args_list[-1].args[2])
+
+	def test_admin_mode_vm_passes_mode_admin_flag(self) -> None:
+		# A clone carrying build_mode=admin gets `--mode admin` so the in-guest script
+		# maps the FQDN to the admin console rather than renaming a (non-existent) site.
+		vm_name = self._make_backing_vm()
+		frappe.db.set_value("Virtual Machine", vm_name, "build_mode", "admin")
+		with (
+			patch.object(deploy_module, "run_ssh", return_value=("ATLAS_RESULT={}", "", 0)) as m_ssh,
+			patch.object(deploy_module, "run_scp"),
+			patch.object(deploy_module, "wait_for_ssh"),
+		):
+			deploy_module.deploy_site(vm_name, "acme.blr1.frappe.dev")
+		self.assertIn("--mode admin", m_ssh.call_args_list[-1].args[2])
+
+
+class TestReadinessPathForMode(IntegrationTestCase):
+	"""The readiness/health PATH is mode-aware: a Frappe site answers
+	`/api/method/ping`; the admin console (a Flask app) answers `/api/status`."""
+
+	def test_site_and_empty_default_to_ping(self) -> None:
+		self.assertEqual(deploy_module.readiness_path_for_mode("site"), "/api/method/ping")
+		self.assertEqual(deploy_module.readiness_path_for_mode(""), "/api/method/ping")
+		self.assertEqual(deploy_module.readiness_path_for_mode(None), "/api/method/ping")
+
+	def test_admin_uses_status(self) -> None:
+		self.assertEqual(deploy_module.readiness_path_for_mode("admin"), "/api/status")
+
+	def test_unknown_mode_falls_back_to_ping(self) -> None:
+		self.assertEqual(deploy_module.readiness_path_for_mode("weird"), "/api/method/ping")
+
 
 class TestGuestScriptTypedIO(IntegrationTestCase):
 	"""The in-guest deploy-site.py's typed I/O + the RENAME deploy flow: kebab-flag
@@ -202,6 +243,41 @@ class TestGuestScriptTypedIO(IntegrationTestCase):
 		self.assertEqual(inputs.site_name, "acme.blr1.frappe.dev")
 		self.assertEqual(inputs.warm_vm_uuid, "")  # default, optional
 		self.assertEqual(inputs.mode, "site")  # default mode
+
+	def test_from_args_parses_admin_mode(self) -> None:
+		inputs = self.guest.DeploySiteInputs.from_args(
+			["--site-name", "admin.blr1.frappe.dev", "--mode", "admin"]
+		)
+		self.assertEqual(inputs.mode, "admin")
+
+	def test_from_args_rejects_unknown_mode(self) -> None:
+		with self.assertRaises(SystemExit):
+			self.guest.DeploySiteInputs.from_args(["--site-name", "x", "--mode", "bogus"])
+
+	def test_serving_probes_ping_in_site_mode(self) -> None:
+		"""site mode: the local health probe hits Frappe's `/api/method/ping`."""
+		seen = []
+		with patch.object(
+			self.guest, "_local_ping", side_effect=lambda host, ip, path: seen.append(path) or True
+		):
+			self.assertTrue(self.guest._serving("acme.blr1.frappe.dev", "site"))
+		self.assertEqual(set(seen), {"/api/method/ping"})
+
+	def test_serving_probes_status_in_admin_mode(self) -> None:
+		"""admin mode: the admin console is a Flask app with no Frappe ping route, so
+		the local health probe hits `/api/status` (200 unauthenticated)."""
+		seen = []
+		with patch.object(
+			self.guest, "_local_ping", side_effect=lambda host, ip, path: seen.append(path) or True
+		):
+			self.assertTrue(self.guest._serving("admin.blr1.frappe.dev", "admin"))
+		self.assertEqual(set(seen), {"/api/status"})
+
+	def test_guest_health_paths_match_controller(self) -> None:
+		"""The in-guest health-path map stays in lockstep with the controller's
+		readiness paths (a drift would make one probe a route the other doesn't)."""
+		self.assertEqual(self.guest._HEALTH_PATH["site"], deploy_module.readiness_path_for_mode("site"))
+		self.assertEqual(self.guest._HEALTH_PATH["admin"], deploy_module.readiness_path_for_mode("admin"))
 
 	def test_from_args_requires_site_name(self) -> None:
 		# argparse exits(2) on the missing required flag — the CLI form of a required

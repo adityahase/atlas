@@ -62,17 +62,127 @@ def _mock_build_ssh(build_result, finalize_result=("", "", 0)):
 
 class TestRecipeRegistry(IntegrationTestCase):
 	def test_known_recipes(self) -> None:
-		self.assertEqual(sorted(RECIPES), ["bench", "proxy"])
+		# Three versioned bench variants in site mode + their three admin twins + the
+		# proxy; the back-compat `bench` alias is NOT a real recipe (so it never appears
+		# in the Select).
+		self.assertEqual(
+			sorted(RECIPES),
+			[
+				"bench-nightly",
+				"bench-nightly-admin",
+				"bench-v15",
+				"bench-v15-admin",
+				"bench-v16",
+				"bench-v16-admin",
+				"proxy",
+			],
+		)
+		self.assertNotIn("bench", RECIPES)
+
+	def test_bench_alias_resolves_to_v16(self) -> None:
+		# Callers that still say "bench" via get_recipe() (bootstrap.build_bench)
+		# resolve to the current line, bench-v16. NOTE: the alias only works through
+		# get_recipe() — a stored Image Build.recipe Select value must be a real name.
+		self.assertIs(get_recipe("bench"), RECIPES["bench-v16"])
+
+	def test_recipe_names_excludes_alias(self) -> None:
+		from atlas.atlas.image_recipes import recipe_names
+
+		names = recipe_names()
+		self.assertNotIn("bench", names)
+		self.assertEqual(set(names), set(RECIPES))
 
 	def test_unknown_recipe_throws(self) -> None:
 		with self.assertRaises(frappe.ValidationError):
 			get_recipe("nope")
+
+	def test_image_build_json_options_match_recipe_names(self) -> None:
+		# The Image Build `recipe` Select options are a hand-maintained mirror of
+		# recipe_names() (the JSON isn't auto-dynamic). Pin them equal so adding a
+		# recipe without updating the JSON fails HERE, loudly — not at the operator's
+		# first bake with a Select-validation reject. (The Server "Bake Image" dialog
+		# in server.js is a third copy; keep it in lockstep too.)
+		import json
+		from pathlib import Path
+
+		from atlas.atlas.image_recipes import recipe_names
+
+		path = Path(frappe.get_app_path("atlas")) / "atlas" / "doctype" / "image_build" / "image_build.json"
+		doc = json.loads(path.read_text())
+		recipe_field = next(f for f in doc["fields"] if f["fieldname"] == "recipe")
+		json_options = recipe_field["options"].split("\n")
+		self.assertEqual(set(json_options), set(recipe_names()))
+		# The back-compat alias must NOT leak into the picker (a stored alias value
+		# would fail the Select validation).
+		self.assertNotIn("bench", json_options)
 
 	def test_bench_recipe_shape(self) -> None:
 		self.assertEqual(_BENCH.task_script, "bench-build")
 		self.assertEqual(_BENCH.registers_as, "default_bench_snapshot")
 		self.assertFalse(_BENCH.is_proxy)
 		self.assertIsNone(_BENCH.finalize)
+
+	def test_bench_variants_carry_version_pins(self) -> None:
+		v16, v15, nightly = (RECIPES["bench-v16"], RECIPES["bench-v15"], RECIPES["bench-nightly"])
+		self.assertEqual(
+			(v16.frappe_branch, v16.erpnext_branch, v16.python_version), ("version-16", "version-16", "3.14")
+		)
+		self.assertEqual(
+			(v15.frappe_branch, v15.erpnext_branch, v15.python_version), ("version-15", "version-15", "3.11")
+		)
+		self.assertEqual((nightly.frappe_branch, nightly.erpnext_branch), ("develop", "develop"))
+		# All three share the proven bench-cli ref + the bench source tree + sizing.
+		self.assertEqual({v16.bench_cli_ref, v15.bench_cli_ref, nightly.bench_cli_ref}, {v16.bench_cli_ref})
+		self.assertTrue(v16.bench_cli_ref)
+		for r in (v16, v15, nightly):
+			self.assertEqual(r.source_directory, "bench")
+			self.assertEqual(r.task_script, "bench-build")
+
+	def test_versioned_recipes_promote_to_series_image_name(self) -> None:
+		# The promote default name == the recipe name == the Central Image image_name.
+		for name in ("bench-v15", "bench-v16", "bench-nightly"):
+			self.assertEqual(RECIPES[name].promote_image_name, name)
+
+	def test_v16_is_the_only_warm_registering_variant(self) -> None:
+		# v16 doubles as the self-serve site accelerator base (warm + registers); v15
+		# and nightly are cold customer goldens (promote-to-image requires cold).
+		self.assertEqual(RECIPES["bench-v16"].warm_entrypoint, "warm.sh")
+		self.assertEqual(RECIPES["bench-v16"].registers_as, "default_bench_snapshot")
+		for name in ("bench-v15", "bench-nightly"):
+			self.assertEqual(RECIPES[name].warm_entrypoint, "")
+			self.assertIsNone(RECIPES[name].registers_as)
+
+	def test_build_mode_defaults_to_site(self) -> None:
+		for name in ("bench-v15", "bench-v16", "bench-nightly"):
+			self.assertEqual(RECIPES[name].build_mode, "site")
+			self.assertEqual(RECIPES[name].effective_build_mode, "site")
+		# The proxy pins no mode; effective_build_mode still resolves to the harmless site.
+		self.assertEqual(RECIPES["proxy"].build_mode, "")
+		self.assertEqual(RECIPES["proxy"].effective_build_mode, "site")
+
+	def test_admin_variants_shape(self) -> None:
+		# Each version ships an admin twin: same pins, build_mode=admin, COLD-only
+		# (no warm), never registers (the admin console is a distinct product, not the
+		# self-serve site golden), and promotes to its own series name (the Central
+		# name-match link). The pins mirror the site twin so a bump stays one edit.
+		for admin_name, site_name in (
+			("bench-v16-admin", "bench-v16"),
+			("bench-v15-admin", "bench-v15"),
+			("bench-nightly-admin", "bench-nightly"),
+		):
+			admin, site = RECIPES[admin_name], RECIPES[site_name]
+			self.assertEqual(admin.build_mode, "admin")
+			self.assertEqual(admin.effective_build_mode, "admin")
+			self.assertEqual(admin.warm_entrypoint, "")
+			self.assertIsNone(admin.registers_as)
+			self.assertEqual(admin.promote_image_name, admin_name)
+			# Same Frappe/ERPNext/Python pins + tree as the site twin — only the mode differs.
+			self.assertEqual(
+				(admin.frappe_branch, admin.erpnext_branch, admin.python_version),
+				(site.frappe_branch, site.erpnext_branch, site.python_version),
+			)
+			self.assertEqual(admin.source_directory, "bench")
+			self.assertEqual(admin.bench_cli_ref, site.bench_cli_ref)
 
 	def test_proxy_recipe_shape(self) -> None:
 		self.assertEqual(_PROXY.task_script, "proxy-build")
@@ -180,3 +290,181 @@ class TestRunBuild(IntegrationTestCase):
 			"Task", filters={"virtual_machine": vm.name, "script": "proxy-build"}, pluck="status"
 		)
 		self.assertEqual(status, ["Failure"])
+
+
+_V15 = get_recipe("bench-v15")
+_V16 = get_recipe("bench-v16")
+_NIGHTLY = get_recipe("bench-nightly")
+
+
+class TestRenderBenchToml(IntegrationTestCase):
+	"""The committed bench.toml is rendered per-version before upload — line-targeted,
+	stdlib only. These read the real committed tree (pure, no host)."""
+
+	def test_renders_python_and_frappe_branch_for_v15(self) -> None:
+		rendered = image_builder._render_bench_toml(_V15)
+		self.assertIn('python = "3.11"', rendered)
+		self.assertIn('branch = "version-15"', rendered)
+		# The committed v16 values are gone — they were rewritten, not appended.
+		self.assertNotIn('python = "3.14"', rendered)
+		self.assertNotIn('branch = "version-16"', rendered)
+
+	def test_renders_develop_for_nightly(self) -> None:
+		rendered = image_builder._render_bench_toml(_NIGHTLY)
+		self.assertIn('branch = "develop"', rendered)
+		self.assertIn('python = "3.14"', rendered)
+
+	def test_render_is_a_noop_shape_for_v16(self) -> None:
+		# v16's pins equal the committed defaults, so the rendered text still carries
+		# them (the point is correctness, not that it differs from the file).
+		rendered = image_builder._render_bench_toml(_V16)
+		self.assertIn('python = "3.14"', rendered)
+		self.assertIn('branch = "version-16"', rendered)
+
+	def test_only_frappe_app_branch_is_touched(self) -> None:
+		# Section-aware: a second [[apps]] block's branch must NOT be rewritten. Drive
+		# the helper against a synthetic toml via the real substitution path by
+		# temporarily standing up a recipe-shaped object.
+		from atlas.atlas.image_recipes import ImageRecipe
+
+		toml = (
+			"[bench]\n"
+			'python = "3.14"\n'
+			"\n"
+			"[[apps]]\n"
+			'name = "frappe"\n'
+			'branch = "version-16"\n'
+			"\n"
+			"[[apps]]\n"
+			'name = "erpnext"\n'
+			'branch = "version-16"\n'
+		)
+		# _render_bench_toml reads from disk, so exercise the inner section logic by
+		# pointing _source_directory at a temp dir holding this toml.
+		import tempfile
+		from pathlib import Path
+		from unittest.mock import patch
+
+		with tempfile.TemporaryDirectory() as d:
+			(Path(d) / "bench.toml").write_text(toml)
+			recipe = ImageRecipe(
+				name="t",
+				title="t",
+				source_directory="bench",
+				build_entrypoint="build.sh",
+				remote_directory="/tmp/t",
+				disk_gigabytes=1,
+				memory_megabytes=1,
+				vcpus=1,
+				snapshot_title="t",
+				task_script="t",
+				frappe_branch="version-15",
+				python_version="3.11",
+			)
+			with patch.object(image_builder, "_source_directory", return_value=Path(d)):
+				rendered = image_builder._render_bench_toml(recipe)
+		# frappe's branch flipped to version-15; erpnext's branch stayed version-16.
+		lines = rendered.splitlines()
+		self.assertIn('branch = "version-15"', lines)
+		self.assertEqual(rendered.count('branch = "version-15"'), 1)
+		self.assertEqual(rendered.count('branch = "version-16"'), 1)  # erpnext untouched
+
+	def test_proxy_renders_nothing(self) -> None:
+		self.assertIsNone(image_builder._render_bench_toml(_PROXY))
+
+	def test_fail_loud_when_python_line_missing(self) -> None:
+		import tempfile
+		from pathlib import Path
+		from unittest.mock import patch
+
+		from atlas.atlas.image_recipes import ImageRecipe
+
+		with tempfile.TemporaryDirectory() as d:
+			(Path(d) / "bench.toml").write_text('[bench]\nname = "atlas"\n')
+			recipe = ImageRecipe(
+				name="t",
+				title="t",
+				source_directory="bench",
+				build_entrypoint="build.sh",
+				remote_directory="/tmp/t",
+				disk_gigabytes=1,
+				memory_megabytes=1,
+				vcpus=1,
+				snapshot_title="t",
+				task_script="t",
+				python_version="3.11",
+			)
+			with patch.object(image_builder, "_source_directory", return_value=Path(d)):
+				with self.assertRaises(frappe.ValidationError):
+					image_builder._render_bench_toml(recipe)
+
+
+class TestBuildCommand(IntegrationTestCase):
+	def test_env_carries_cli_ref_and_erpnext_branch(self) -> None:
+		env = image_builder._build_env(_V15)
+		self.assertEqual(env["BENCH_CLI_REF"], _V15.bench_cli_ref)
+		self.assertEqual(env["ERPNEXT_BRANCH"], "version-15")
+
+	def test_proxy_env_is_empty(self) -> None:
+		self.assertEqual(image_builder._build_env(_PROXY), {})
+
+	def test_command_exports_env_and_passes_mode(self) -> None:
+		command = image_builder._build_command(_V16)
+		self.assertIn(f"export BENCH_CLI_REF={_V16.bench_cli_ref}", command)
+		self.assertIn("export ERPNEXT_BRANCH=version-16", command)
+		# Ends with `… build.sh site` (the bake mode, the entrypoint's positional arg).
+		self.assertTrue(command.rstrip().endswith("build.sh site"), command)
+		self.assertIn("chmod +x", command)
+
+	def test_command_passes_admin_mode(self) -> None:
+		import dataclasses
+
+		from atlas.atlas.image_recipes import RECIPES
+
+		# A hypothetical admin variant: only build_mode differs. Use replace to avoid
+		# minting one in the registry.
+		admin = dataclasses.replace(RECIPES["bench-v16"], build_mode="admin")
+		self.assertTrue(image_builder._build_command(admin).rstrip().endswith("build.sh admin"))
+
+
+class TestUploadsWithRenderedToml(IntegrationTestCase):
+	def test_swaps_bench_toml_for_rendered_temp_and_cleans_up(self) -> None:
+		import os
+		from contextlib import ExitStack
+
+		with ExitStack() as stack:
+			uploads = image_builder._uploads_with_rendered_toml(_V15, stack)
+			remote_toml = f"{_V15.remote_directory}/bench.toml"
+			swapped = [(local, remote) for local, remote in uploads if remote == remote_toml]
+			self.assertEqual(len(swapped), 1)
+			local_path = swapped[0][0]
+			# The swapped local file is a temp file (not the committed bench.toml) with
+			# the v15-rendered content, and it exists while the stack is open.
+			self.assertTrue(str(local_path).startswith("/") and local_path.exists())
+			self.assertNotEqual(local_path.name, "bench.toml")
+			self.assertIn('branch = "version-15"', local_path.read_text())
+			temp_name = str(local_path)
+		# Closed stack → temp file unlinked.
+		self.assertFalse(os.path.exists(temp_name))
+
+	def test_proxy_uploads_are_verbatim(self) -> None:
+		from contextlib import ExitStack
+
+		with ExitStack() as stack:
+			uploads = image_builder._uploads_with_rendered_toml(_PROXY, stack)
+		# Proxy renders nothing, so uploads == tree_uploads verbatim.
+		self.assertEqual(uploads, image_builder.tree_uploads(_PROXY))
+
+	def test_run_build_uses_rendered_toml_and_version_command(self) -> None:
+		vm = _new_vm()
+		with _mock_build_ssh(("baked", "", 0)) as (_ssh, run_scp, run_detached, _fh, _fin):
+			image_builder.run_build(vm.name, _V15)
+		# The detached build command carries the version env + bake mode.
+		command = run_detached.call_args.args[2]
+		self.assertIn(f"export BENCH_CLI_REF={_V15.bench_cli_ref}", command)
+		self.assertIn("export ERPNEXT_BRANCH=version-15", command)
+		self.assertTrue(command.rstrip().endswith("build.sh site"))
+		# The bench.toml that was scp'd is the rendered (v15) one, not the committed v16.
+		remote_toml = f"{_V15.remote_directory}/bench.toml"
+		toml_scp = [c for c in run_scp.call_args_list if c.args[3] == remote_toml]
+		self.assertEqual(len(toml_scp), 1)

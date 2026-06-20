@@ -59,6 +59,30 @@ class ImageRecipe:
 	# HTTP, and install the identity freshen unit — run right before the paused
 	# memory+disk capture. Empty = the recipe can only bake cold.
 	warm_entrypoint: str = ""
+	# --- Per-version pins (bench recipes only; empty/None on proxy) ---
+	# One committed `bench/` tree bakes any Frappe version: these pins are rendered
+	# into bench.toml (frappe_branch → [[apps]].branch, python_version → [bench].python)
+	# and injected as build.sh env overrides (bench_cli_ref → BENCH_CLI_REF,
+	# erpnext_branch → ERPNEXT_BRANCH) by image_builder, so build.sh + bench.toml stay
+	# the proven recipe and the *only* thing that varies between v15/v16/nightly is
+	# this data. Empty means "use the committed default" (build.sh's own pin / the
+	# bench.toml as-committed), which is exactly the proxy recipe's situation.
+	frappe_branch: str = ""
+	erpnext_branch: str = ""
+	bench_cli_ref: str = ""
+	python_version: str = ""
+	# What the bake produces and a clone's FQDN maps to on first boot (spec/08):
+	#   site  — a baked `site.local` renamed to the per-VM FQDN (the FQDN serves a site)
+	#   admin — bench + admin app only, no site (the FQDN serves the admin console)
+	# Threaded build VM → snapshot → clone → deploy-site.py `--mode`. Empty (proxy)
+	# is treated as the default `site` everywhere it is read.
+	build_mode: str = ""
+	# The base-image name a promoted golden defaults to (the Central Image catalog
+	# links by EXACT name-match — central.upsert_central_images). For the three
+	# customer variants this is the series image name (`bench-v15` / `bench-v16` /
+	# `bench-nightly`) so Fetch Images flips that Central Image to Baked + links it.
+	# Empty falls back to `<recipe>-<build name>` (Image Build.promote's old default).
+	promote_image_name: str = ""
 
 	@property
 	def build_log_path(self) -> str:
@@ -73,6 +97,13 @@ class ImageRecipe:
 	@property
 	def remote_entrypoint(self) -> str:
 		return f"{self.remote_directory}/{self.build_entrypoint}"
+
+	@property
+	def effective_build_mode(self) -> str:
+		"""The bake mode build.sh/deploy-site.py understand: site or admin. A recipe
+		that leaves `build_mode` empty (proxy) is treated as site — the harmless
+		default (the proxy never threads a mode; only bench recipes do)."""
+		return self.build_mode or "site"
 
 
 def _finalize_proxy(virtual_machine, connection, key_path) -> tuple[str, str, int]:
@@ -117,21 +148,134 @@ def _finalize_proxy(virtual_machine, connection, key_path) -> tuple[str, str, in
 _BENCH_DISK_GB = 28
 _BENCH_MEMORY_MB = 2048
 
+# The proven bench-cli commit (main @ 2026-06-18, incl. the IPv6-listeners commit
+# dd14ad4) every bench variant builds with. bench-cli is the build *tool*, not the
+# framework: it reads the Frappe branch + Python version from bench.toml and natively
+# knows `version-15`/`version-16`/`develop` (core/app.py), so ONE ref bakes all three
+# variants — the version lives in the per-recipe pins below, not in the tool. Pinned
+# (not `main`) so the golden is reproducible; a variant can override it if a future
+# Frappe release needs a newer bench-cli. Kept in lockstep with bench/build.sh's
+# BENCH_CLI_REF default (the value a direct `build.sh` run uses with no env override).
+_BENCH_CLI_REF = "f36a06c541162aec80dd7b9894ccb4691597b9d3"
 
-RECIPES: dict[str, "ImageRecipe"] = {
-	"bench": ImageRecipe(
-		name="bench",
-		title="Golden bench image",
+
+def _bench_variant(
+	name: str,
+	title: str,
+	*,
+	frappe_branch: str,
+	erpnext_branch: str,
+	python_version: str,
+	build_mode: str = "site",
+	registers_as: str | None = None,
+	warm_entrypoint: str = "",
+) -> ImageRecipe:
+	"""A versioned golden bench recipe. The three customer variants (v15/v16/nightly)
+	differ ONLY in their Frappe/ERPNext branch + Python pins, the bake mode, and their
+	promote target image name (= the series name, so Central links it by name-match).
+	Everything else — the committed `bench/` tree, the build-VM sizing, the bench-cli
+	ref, the snapshot/task naming scheme — is shared. `promote_image_name` defaults to
+	the recipe name (`bench-v15` etc.), which IS the Central Image `image_name`."""
+	return ImageRecipe(
+		name=name,
+		title=title,
 		source_directory="bench",
 		build_entrypoint="build.sh",
 		remote_directory="/tmp/atlas-bench-build",
 		disk_gigabytes=_BENCH_DISK_GB,
 		memory_megabytes=_BENCH_MEMORY_MB,
 		vcpus=2,
-		snapshot_title="golden-bench",
+		snapshot_title=title,
 		task_script="bench-build",
+		frappe_branch=frappe_branch,
+		erpnext_branch=erpnext_branch,
+		bench_cli_ref=_BENCH_CLI_REF,
+		python_version=python_version,
+		build_mode=build_mode,
+		registers_as=registers_as,
+		warm_entrypoint=warm_entrypoint,
+		promote_image_name=name,
+	)
+
+
+RECIPES: dict[str, "ImageRecipe"] = {
+	# --- The three customer-facing golden bench variants. Baked per Frappe/Bench
+	# release; promoted to a base image named exactly `bench-v<NN>` / `bench-nightly`
+	# so the Central Image catalog links it by name-match and customers pick the
+	# version through the ordinary VM `image` field (spec/15, spec/16). ---
+	#
+	# v16 is the current/default line: it keeps the warm entrypoint (it doubles as the
+	# self-serve site accelerator base) and `registers_as=default_bench_snapshot`, so
+	# an auto-registered v16 warm bake stays the self-serve golden — the existing
+	# behaviour, unchanged. v15 + nightly are COLD customer goldens (no warm, no
+	# register): promote-to-image requires cold, and only one warm golden registers
+	# per server.
+	"bench-v16": _bench_variant(
+		"bench-v16",
+		"Golden bench v16",
+		frappe_branch="version-16",
+		erpnext_branch="version-16",
+		python_version="3.14",
 		registers_as="default_bench_snapshot",
 		warm_entrypoint="warm.sh",
+	),
+	# Frappe v15 predates Python 3.14; it runs on 3.11 (uv fetches the interpreter,
+	# so the host needn't preinstall it — python_env_manager runs `uv venv --python
+	# 3.11`). v15+python compat is the one host fact still unproven until a real bake
+	# (spec/15 release gate).
+	"bench-v15": _bench_variant(
+		"bench-v15",
+		"Golden bench v15",
+		frappe_branch="version-15",
+		erpnext_branch="version-15",
+		python_version="3.11",
+	),
+	# Nightly tracks the moving `develop` of both Frappe and ERPNext. The bake records
+	# the resolved commit SHAs into the Image Build for traceability (image_build.run),
+	# since the inputs float.
+	"bench-nightly": _bench_variant(
+		"bench-nightly",
+		"Golden bench nightly (develop)",
+		frappe_branch="develop",
+		erpnext_branch="develop",
+		python_version="3.14",
+	),
+	# --- The admin-console line. Same three Frappe versions, but baked in `admin`
+	# mode: build.sh skips `new-site` + ERPNext entirely and leaves only the bench +
+	# the bench-cli admin app running (a Flask management console, NOT a Frappe site).
+	# A clone's first-boot deploy sets `[admin].domain = <fqdn>` + `bench setup nginx`
+	# so the FQDN maps to the admin app (deploy-site.py `--mode admin`); its readiness
+	# probe is the admin app's `/api/status`, not the Frappe `/api/method/ping`
+	# (spec/08, [[atlas-admin-mode-health-path]]). These are COLD goldens — no warm
+	# entrypoint (warm is the self-serve *site* accelerator's concern) and no
+	# `registers_as` (the admin image is a distinct product, never the
+	# `default_bench_snapshot` a self-serve site clones). They promote to their own
+	# series name (`bench-v16-admin` etc.) so the Central catalog links them by
+	# name-match alongside the site variants; a customer picks an admin VM through the
+	# ordinary `image` field. ---
+	"bench-v16-admin": _bench_variant(
+		"bench-v16-admin",
+		"Golden bench v16 (admin)",
+		frappe_branch="version-16",
+		erpnext_branch="version-16",
+		python_version="3.14",
+		build_mode="admin",
+	),
+	"bench-v15-admin": _bench_variant(
+		"bench-v15-admin",
+		"Golden bench v15 (admin)",
+		frappe_branch="version-15",
+		erpnext_branch="version-15",
+		python_version="3.11",
+		build_mode="admin",
+	),
+	"bench-nightly-admin": _bench_variant(
+		"bench-nightly-admin",
+		"Golden bench nightly admin (develop)",
+		frappe_branch="develop",
+		erpnext_branch="develop",
+		python_version="3.14",
+		build_mode="admin",
 	),
 	"proxy": ImageRecipe(
 		name="proxy",
@@ -153,12 +297,24 @@ RECIPES: dict[str, "ImageRecipe"] = {
 }
 
 
+# Back-compat aliases: the old single `bench` recipe split into three versioned
+# variants, so `bench` now resolves to `bench-v16` (the current line, the drop-in
+# successor). Callers that still say `"bench"` (bootstrap, warm_restore e2e, older
+# tests) keep working; the alias is deliberately NOT a Select option (recipe_names),
+# so the operator only ever picks an explicit version. Remove the alias once every
+# caller is updated.
+_ALIASES = {"bench": "bench-v16"}
+
+
 def get_recipe(name: str) -> "ImageRecipe":
+	name = _ALIASES.get(name, name)
 	if name not in RECIPES:
 		frappe.throw(f"Unknown image recipe {name!r}; known: {sorted(RECIPES)}")
 	return RECIPES[name]
 
 
 def recipe_names() -> list[str]:
-	"""The recipe keys, for the Image Build `recipe` Select options."""
+	"""The recipe keys an operator picks, for the Image Build `recipe` Select options.
+	Real recipes only — the back-compat `bench` alias is intentionally excluded so the
+	operator always selects an explicit version (bench-v15 / bench-v16 / bench-nightly)."""
 	return list(RECIPES)

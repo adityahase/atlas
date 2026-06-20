@@ -208,7 +208,11 @@ class TestGuestWarmTooling(unittest.TestCase):
 		self.assertEqual(result.returncode, 0, result.stderr)
 		source = (_BENCH_DIR / "warm.sh").read_text()
 		self.assertIn("atlas-warm-freshen", source)  # the unit must be live at capture
-		self.assertIn("setup production", source)  # the stack must be UP in the frozen RAM
+		# The stack is already UP (build.sh's `bench start` under systemd-mode); warm.sh
+		# pre-warms it with real HTTP and asserts it is serving before the freeze, so the
+		# frozen RAM answers `pong` the instant a clone resumes.
+		self.assertIn("/api/method/ping", source)  # pre-warm + serving assertion
+		self.assertIn("*pong*", source)  # the stack must be serving in the frozen RAM
 		self.assertIn("rm -f /var/lib/systemd/random-seed", source)  # clone-entropy hygiene
 		self.assertIn("/etc/atlas-vm-uuid", source)  # the adopted-identity marker
 

@@ -22,7 +22,7 @@ def _purge() -> None:
 		frappe.delete_doc("Image Build", name, force=1, ignore_permissions=True)
 
 
-def _new_build(recipe: str = "bench", **overrides):
+def _new_build(recipe: str = "bench-v16", **overrides):
 	"""Insert an Image Build WITHOUT firing the background job (after_insert
 	enqueues run() — we drive run() by hand in the tests that want it).
 
@@ -48,8 +48,8 @@ class TestImageBuildInsert(IntegrationTestCase):
 		_purge()
 
 	def test_before_insert_fills_title_and_status(self) -> None:
-		build = _new_build("bench")
-		self.assertEqual(build.title, "Golden bench image")
+		build = _new_build("bench-v16")
+		self.assertEqual(build.title, "Golden bench v16")
 		self.assertEqual(build.status, "Draft")
 		# Base image defaulted from Atlas Settings / the active image.
 		self.assertTrue(build.base_image)
@@ -68,7 +68,7 @@ class TestImageBuildInsert(IntegrationTestCase):
 			frappe.get_doc(
 				{
 					"doctype": "Image Build",
-					"recipe": "bench",
+					"recipe": "bench-v16",
 					"server": _ensure_test_server(),
 					"base_image": _ensure_test_image(),
 				}
@@ -81,7 +81,7 @@ class TestImageBuildInsert(IntegrationTestCase):
 		self.assertEqual(enqueue.call_args.kwargs["queue"], "long")
 
 	def test_recipe_is_immutable_after_insert(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		build.recipe = "proxy"
 		with self.assertRaises(frappe.ValidationError):
 			build.save(ignore_permissions=True)
@@ -119,7 +119,7 @@ class TestImageBuildRun(IntegrationTestCase):
 		return m_prov, m_wait, m_build, m_snap, m_register, m_terminate
 
 	def test_happy_path_reaches_available_and_links_artifacts(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		self._run_with_mocks(build)
 		build.reload()
 		self.assertEqual(build.status, "Available")
@@ -127,12 +127,12 @@ class TestImageBuildRun(IntegrationTestCase):
 		self.assertEqual(build.snapshot, "snap-1")
 
 	def test_bench_build_auto_registers_when_checked(self) -> None:
-		build = _new_build("bench", auto_register=1)
+		build = _new_build("bench-v16", auto_register=1)
 		_, _, _, _, m_register, _ = self._run_with_mocks(build)
 		m_register.assert_called_once()
 
 	def test_bench_build_skips_register_when_unchecked(self) -> None:
-		build = _new_build("bench", auto_register=0)
+		build = _new_build("bench-v16", auto_register=0)
 		_, _, _, _, m_register, _ = self._run_with_mocks(build)
 		m_register.assert_not_called()
 
@@ -144,17 +144,17 @@ class TestImageBuildRun(IntegrationTestCase):
 		m_register.assert_not_called()
 
 	def test_terminate_build_vm_when_checked(self) -> None:
-		build = _new_build("bench", terminate_build_vm=1)
+		build = _new_build("bench-v16", terminate_build_vm=1)
 		_, _, _, _, _, m_terminate = self._run_with_mocks(build)
 		m_terminate.assert_called_once_with("build-vm-1")
 
 	def test_keeps_build_vm_by_default(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		_, _, _, _, _, m_terminate = self._run_with_mocks(build)
 		m_terminate.assert_not_called()
 
 	def test_failure_marks_failed_and_records_error_and_reraises(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		with (
 			patch.object(image_build_module, "_provision_build_vm", return_value="vm-x"),
 			patch.object(image_build_module, "_wait_for_vm_running"),
@@ -168,11 +168,64 @@ class TestImageBuildRun(IntegrationTestCase):
 		self.assertIn("build broke", build.error)
 
 	def test_run_is_noop_when_not_draft(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		build.db_set("status", "Available")
 		with patch.object(image_build_module, "_provision_build_vm") as m_prov:
 			image_build_module.run(build.name)
 		m_prov.assert_not_called()
+
+	def test_provision_build_vm_stamps_bench_mode(self) -> None:
+		# The real _provision_build_vm inserts a VM (its after_insert enqueues a boot
+		# job — patch enqueue so it doesn't run). A bench recipe stamps build_mode=site;
+		# the proxy recipe leaves it empty.
+		from atlas.atlas.image_recipes import get_recipe
+
+		build = _new_build("bench-v16")
+		with patch.object(image_build_module.frappe, "enqueue"):
+			vm_name = image_build_module._provision_build_vm(build, get_recipe("bench-v16"))
+		self.assertEqual(frappe.db.get_value("Virtual Machine", vm_name, "build_mode"), "site")
+
+	def test_provision_build_vm_proxy_has_no_mode(self) -> None:
+		from atlas.atlas.image_recipes import get_recipe
+
+		build = _new_build("proxy", region="blr1")
+		with patch.object(image_build_module.frappe, "enqueue"):
+			vm_name = image_build_module._provision_build_vm(build, get_recipe("proxy"))
+		self.assertFalse(frappe.db.get_value("Virtual Machine", vm_name, "build_mode"))
+
+	def test_records_build_inputs_from_task_stdout(self) -> None:
+		# _record_build_inputs harvests the ATLAS_BUILD_*= lines build.sh stamped into
+		# the build Task's stdout into build_inputs JSON. Insert a REAL Task row (the
+		# harvest reads stdout back from the DB by name).
+		build = _new_build("bench-nightly")
+		task = frappe.get_doc(
+			{
+				"doctype": "Task",
+				"script": "bench-build",
+				"triggered_by": "Administrator",
+				"status": "Success",
+				"variables": "{}",
+				"stdout": (
+					"some build noise\n"
+					"ATLAS_BUILD_BENCH_CLI_REF=deadbeef\n"
+					"ATLAS_BUILD_FRAPPE_SHA=cafe1234\n"
+					"ATLAS_BUILD_ERPNEXT_SHA=feed5678\n"
+				),
+			}
+		).insert(ignore_permissions=True)
+		build.db_set("build_task", task.name)
+		image_build_module._record_build_inputs(build)
+		build.reload()
+		inputs = frappe.parse_json(build.build_inputs)
+		self.assertEqual(inputs["bench_cli_ref"], "deadbeef")
+		self.assertEqual(inputs["frappe_sha"], "cafe1234")
+		self.assertEqual(inputs["erpnext_sha"], "feed5678")
+
+	def test_record_build_inputs_noop_without_task(self) -> None:
+		build = _new_build("bench-nightly")
+		image_build_module._record_build_inputs(build)  # no build_task
+		build.reload()
+		self.assertFalse(build.build_inputs)
 
 
 class TestImageBuildRebake(IntegrationTestCase):
@@ -182,7 +235,7 @@ class TestImageBuildRebake(IntegrationTestCase):
 		_purge()
 
 	def test_rebake_resets_to_draft_and_reenqueues(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		build.db_set("status", "Failed")
 		build.db_set("error", "old failure")
 		with patch.object(image_build_module.frappe, "enqueue") as enqueue:
@@ -194,7 +247,7 @@ class TestImageBuildRebake(IntegrationTestCase):
 		enqueue.assert_called_once()
 
 	def test_rebake_rejected_while_in_flight(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		build.db_set("status", "Building")
 		with self.assertRaises(frappe.ValidationError):
 			build.rebake()
@@ -211,25 +264,28 @@ class TestImageBuildPromote(IntegrationTestCase):
 		_purge()
 
 	def test_promote_delegates_with_default_name(self) -> None:
+		# Delegation + the default image name. For a versioned bench build the default
+		# is the series image name (bench-v16), the Central-Image name-match link — the
+		# fallback <recipe>-<build> slug is covered separately for the proxy recipe.
 		from unittest.mock import MagicMock
 
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		build.db_set("status", "Available")
 		build.db_set("snapshot", "snap-xyz")
 		build.reload()
 		snapshot = MagicMock()
-		snapshot.promote_to_image.return_value = "bench-img-build-00001"
+		snapshot.promote_to_image.return_value = "bench-v16"
 		with patch.object(image_build_module.frappe, "get_doc", return_value=snapshot):
 			result = build.promote()
 		snapshot.promote_to_image.assert_called_once()
 		kwargs = snapshot.promote_to_image.call_args.kwargs
-		self.assertEqual(kwargs["image_name"], f"bench-{build.name}".lower())
-		self.assertEqual(result, "bench-img-build-00001")
+		self.assertEqual(kwargs["image_name"], "bench-v16")
+		self.assertEqual(result, "bench-v16")
 
 	def test_promote_passes_explicit_name(self) -> None:
 		from unittest.mock import MagicMock
 
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		build.db_set("status", "Available")
 		build.db_set("snapshot", "snap-xyz")
 		build.reload()
@@ -242,15 +298,62 @@ class TestImageBuildPromote(IntegrationTestCase):
 		self.assertEqual(kwargs["title"], "My Image")
 
 	def test_promote_rejects_non_available_build(self) -> None:
-		build = _new_build("bench")  # Draft
+		build = _new_build("bench-v16")  # Draft
 		with self.assertRaises(frappe.ValidationError) as raised:
 			build.promote()
 		self.assertIn("Available", str(raised.exception))
 
 	def test_promote_rejects_build_without_snapshot(self) -> None:
-		build = _new_build("bench")
+		build = _new_build("bench-v16")
 		build.db_set("status", "Available")  # but no snapshot linked
 		build.reload()
 		with self.assertRaises(frappe.ValidationError) as raised:
 			build.promote()
 		self.assertIn("no snapshot", str(raised.exception))
+
+	def test_versioned_build_default_names_to_series_image(self) -> None:
+		# The Central Image catalog links by exact name-match, so a versioned bench
+		# build's promoted image defaults to the SERIES name (bench-v15 / -v16 /
+		# -nightly), not the <recipe>-<build name> slug.
+		from unittest.mock import MagicMock
+
+		for recipe in ("bench-v15", "bench-v16", "bench-nightly"):
+			with self.subTest(recipe=recipe):
+				build = _new_build(recipe)
+				build.db_set("status", "Available")
+				build.db_set("snapshot", "snap-xyz")
+				build.reload()
+				snapshot = MagicMock()
+				snapshot.promote_to_image.return_value = recipe
+				with patch.object(image_build_module.frappe, "get_doc", return_value=snapshot):
+					build.promote()
+				self.assertEqual(snapshot.promote_to_image.call_args.kwargs["image_name"], recipe)
+
+	def test_explicit_name_overrides_series_default(self) -> None:
+		from unittest.mock import MagicMock
+
+		build = _new_build("bench-v15")
+		build.db_set("status", "Available")
+		build.db_set("snapshot", "snap-xyz")
+		build.reload()
+		snapshot = MagicMock()
+		snapshot.promote_to_image.return_value = "custom"
+		with patch.object(image_build_module.frappe, "get_doc", return_value=snapshot):
+			build.promote(image_name="custom")
+		self.assertEqual(snapshot.promote_to_image.call_args.kwargs["image_name"], "custom")
+
+	def test_proxy_build_falls_back_to_recipe_build_slug(self) -> None:
+		# A recipe with no series name (proxy) keeps the old <recipe>-<build> default.
+		from unittest.mock import MagicMock
+
+		build = _new_build("proxy", region="blr1")
+		build.db_set("status", "Available")
+		build.db_set("snapshot", "snap-xyz")
+		build.reload()
+		snapshot = MagicMock()
+		snapshot.promote_to_image.return_value = "x"
+		with patch.object(image_build_module.frappe, "get_doc", return_value=snapshot):
+			build.promote()
+		self.assertEqual(
+			snapshot.promote_to_image.call_args.kwargs["image_name"], f"proxy-{build.name}".lower()
+		)

@@ -24,6 +24,7 @@
   "snapshot",
   "column_break_artifacts",
   "build_task",
+  "build_inputs",
   "error"
  ],
  "fields": [
@@ -33,13 +34,13 @@
    "label": "Overview"
   },
   {
-   "description": "Which image to bake. The recipe names the committed source tree, the build entrypoint, and the build-VM sizing (atlas.atlas.image_recipes).",
+   "description": "Which image to bake. The recipe names the committed source tree, the build entrypoint, the build-VM sizing, and (bench variants) the Frappe/ERPNext/Python version pins (atlas.atlas.image_recipes). bench-v16 is the current site line; bench-v15/-nightly are the other site versions; the -admin variants bake the bench-cli admin console (no site); proxy is the reverse-proxy image. Keep in lockstep with image_recipes.recipe_names().",
    "fieldname": "recipe",
    "fieldtype": "Select",
    "in_list_view": 1,
    "in_standard_filter": 1,
    "label": "Recipe",
-   "options": "bench\nproxy",
+   "options": "bench-v16\nbench-v15\nbench-nightly\nbench-v16-admin\nbench-v15-admin\nbench-nightly-admin\nproxy",
    "reqd": 1,
    "set_only_once": 1
   },
@@ -153,6 +154,14 @@
    "fieldtype": "Link",
    "label": "Build Task",
    "options": "Task",
+   "read_only": 1
+  },
+  {
+   "description": "The resolved input commits (frappe / erpnext / bench-cli SHAs) the bake actually built from, harvested from the build Task. Matters most for the nightly variant, whose develop branches float — this pins what a given nightly image really is.",
+   "fieldname": "build_inputs",
+   "fieldtype": "Code",
+   "label": "Build Inputs",
+   "options": "JSON",
    "read_only": 1
   },
   {

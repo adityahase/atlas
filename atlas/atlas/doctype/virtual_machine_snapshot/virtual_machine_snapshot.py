@@ -82,6 +82,10 @@ class VirtualMachineSnapshot(Document):
 				"data_disk_format_and_mount": self.data_disk_format_and_mount,
 				"data_disk_mount_point": self.data_disk_mount_point,
 				"clone_source_data_rootfs": self.data_rootfs_path,
+				# Carry the bench bake mode onto the clone, where its first-boot
+				# deploy reads it (site → rename the baked site to the FQDN; admin →
+				# map the FQDN to the admin console). Empty for a plain snapshot.
+				"build_mode": self.build_mode or None,
 			}
 		).insert(ignore_permissions=True)
 		return clone.name
@@ -131,6 +135,9 @@ class VirtualMachineSnapshot(Document):
 				"clone_source_rootfs": self.rootfs_path,
 				"warm_snapshot": self.name,
 				"tap_device": self.tap_device,
+				# Carry the bench bake mode onto the warm clone (a warm v16 golden is
+				# site mode), so its first-boot deploy maps the FQDN correctly.
+				"build_mode": self.build_mode or None,
 			}
 		).insert(ignore_permissions=True)
 		return clone.name
@@ -275,6 +282,12 @@ class VirtualMachineSnapshot(Document):
 				"rootfs_filename": rootfs_filename,
 				"rootfs_sha256": "",
 				"default_disk_gigabytes": self.disk_gigabytes,
+				# Carry the bench bake mode onto the base image, so a VM created from it
+				# via the ordinary `image` field inherits build_mode and its first-boot
+				# deploy maps the FQDN to the admin console (admin) or the baked site
+				# (site) — the snapshot→clone path already carried it; this is the
+				# promote→image path's equivalent (spec/08). Empty for a non-bench image.
+				"build_mode": self.build_mode or None,
 				"tenant": self.tenant,
 				"is_active": 1,
 			}

@@ -5,6 +5,7 @@ IMMUTABLE_AFTER_INSERT = (
 	"image_name",
 	"title",
 	"default_disk_gigabytes",
+	"build_mode",
 	"kernel_url",
 	"kernel_filename",
 	"kernel_sha256",

@@ -451,11 +451,14 @@ def _wait_for_http(site, vm_name: str) -> None:
 
 	Seam for the `wait_for_http` probe over the VM's public /128. Passes
 	the site FQDN as the Host header (Contract A) so the bench's multitenant nginx
-	routes the probe to THIS site, not just any site on the VM."""
-	from atlas.atlas.deploy_site import wait_for_http
+	routes the probe to THIS site, not just any site on the VM. The readiness PATH is
+	mode-aware: `/api/method/ping` for a site-mode clone, `/api/status` for an
+	admin-mode clone (the admin console is a Flask app with no Frappe ping route) —
+	resolved from the clone's `build_mode`."""
+	from atlas.atlas.deploy_site import readiness_path_for_mode, wait_for_http
 
 	vm = frappe.get_doc("Virtual Machine", vm_name)
-	wait_for_http(vm.ipv6_address, site.name)
+	wait_for_http(vm.ipv6_address, site.name, path=readiness_path_for_mode(vm.build_mode))
 
 
 def _create_subdomain(site, vm_name: str) -> str:

@@ -68,6 +68,7 @@ class VirtualMachine(Document):
 		# anything that depends on server (ipv6 allocation derives from it).
 		# No-op for the operator path, which supplies both. See placement.py.
 		apply_user_defaults(self)
+		self.set_build_mode_default()
 		self.set_status_default()
 		self.set_ipv6_address()
 
@@ -103,6 +104,18 @@ class VirtualMachine(Document):
 		# form path; this covers direct API/test construction.
 		if not self.cpu_mode:
 			self.cpu_mode = CPU_MODE_RELAXED
+
+	def set_build_mode_default(self) -> None:
+		"""Inherit the bench bake mode from the base image when the caller didn't set
+		one. A promoted bench golden carries build_mode (admin/site); a VM created from
+		it via the ordinary `image` field should map its FQDN the same way the golden was
+		baked, without the caller having to restate the mode. Only fills an unset value,
+		so the recipe-stamped build VM (image_build) and snapshot clones — which set
+		build_mode explicitly — are untouched, and an ordinary base image (no mode) leaves
+		it empty (→ site, the harmless default everywhere it is read). See spec/08."""
+		if self.build_mode or not self.image:
+			return
+		self.build_mode = frappe.db.get_value("Virtual Machine Image", self.image, "build_mode") or None
 
 	def set_status_default(self) -> None:
 		if not self.status:
@@ -328,6 +341,10 @@ class VirtualMachine(Document):
 				"data_disk_gigabytes": self.data_disk_gigabytes,
 				"data_disk_mount_point": self.data_disk_mount_point,
 				"data_disk_format_and_mount": self.data_disk_format_and_mount,
+				# Carry the bench bake mode so a clone of this golden maps its FQDN to
+				# the baked site (site) or the admin console (admin) — empty for an
+				# ordinary VM snapshot (spec/08).
+				"build_mode": self.build_mode or None,
 			}
 		).insert(ignore_permissions=True)
 		# The snapshot is an LVM thin snapshot, not a file copy. rootfs_path holds
@@ -417,6 +434,9 @@ class VirtualMachine(Document):
 				"kind": "Warm",
 				"source_image": self.image,
 				"disk_gigabytes": self.disk_gigabytes,
+				# Carry the bench bake mode (empty for an ordinary VM) so a clone of a
+				# golden maps its FQDN correctly on first boot (spec/08).
+				"build_mode": self.build_mode or None,
 				# The frozen vmstate pins the machine and its tap name; a warm clone
 				# must reproduce all three exactly (clone_to_new_vm enforces it).
 				"vcpus": self.vcpus,
