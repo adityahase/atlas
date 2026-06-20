@@ -207,7 +207,7 @@ class TestTreeUploads(IntegrationTestCase):
 		self.assertTrue(any(r.endswith("/build.sh") for r in remotes), remotes)
 		self.assertTrue(any(r.endswith("/conf/nginx.conf") for r in remotes), remotes)
 		self.assertTrue(any(r.endswith("/lua/router.lua") for r in remotes), remotes)
-		self.assertTrue(any(r.endswith("/guest/atlas-proxy.service") for r in remotes), remotes)
+		self.assertTrue(any(r.endswith("/guest/nginx.service") for r in remotes), remotes)
 		# The dev-only compose harness (recipe.exclude=("test",)) + caches are gone.
 		self.assertFalse(any("/test/" in r for r in remotes), remotes)
 		self.assertFalse(any("__pycache__" in r for r in remotes), remotes)
@@ -274,7 +274,7 @@ class TestRunBuild(IntegrationTestCase):
 		finalize_run_ssh.assert_called_once()
 		finalize_command = finalize_run_ssh.call_args.args[2]
 		self.assertIn("blr1", finalize_command)
-		self.assertIn("systemctl restart atlas-proxy.service", finalize_command)
+		self.assertIn("systemctl restart nginx.service", finalize_command)
 		# It must NOT repoint the cert symlink (push_cert owns that, after the real
 		# cert lands — repointing here would dangle the symlink at start).
 		self.assertNotIn("ln -sfn", finalize_command)

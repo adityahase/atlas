@@ -97,7 +97,7 @@ The recipe **subsumes the per-module constants** that used to live in the build
 verbs and the e2e modules (`GOLDEN_DISK_GB`, `GOLDEN_MEMORY_MB`,
 `REMOTE_*_DIRECTORY`, the `test/` exclude, the proxy finalize block). `finalize`
 is a callback because the proxy's post-build step (write `REGION_FILE`,
-`systemctl restart atlas-proxy.service`, [`_finalize_proxy`](../atlas/atlas/image_recipes.py))
+`systemctl restart nginx.service`, [`_finalize_proxy`](../atlas/atlas/image_recipes.py))
 is genuinely code; the bench recipes have `finalize = None`. `registers_as` lets a
 successful **v16** bake auto-set `Atlas Settings.default_bench_snapshot` (the field
 self-serve already reads); only v16 registers (one warm self-serve golden per

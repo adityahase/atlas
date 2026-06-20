@@ -43,7 +43,7 @@ SSHes **into the guest** — the second SSH target type,
 `connection_for_guest(vm)` ([04-tasks.md](./04-tasks.md#how-it-runs)),
 reaching the VM's `/128` as `root` with the same Atlas key already in the guest's
 `authorized_keys`. The guest's admin API is a **unix socket only**
-(`/run/atlas-proxy/admin.sock`); SSH-to-the-guest is the only way to reach it,
+(`/run/nginx/admin.sock`); SSH-to-the-guest is the only way to reach it,
 and the socket's file permissions are the gate.
 
 - **`canonical_json(map)`** — the one canonical serialization: sorted keys,

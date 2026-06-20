@@ -24,11 +24,14 @@ from atlas.atlas._ssh.transport import run_ssh, ssh_key_file
 from atlas.atlas.doctype.subdomain.subdomain import map_for_region
 from atlas.atlas.ssh import connection_for_guest
 
-ADMIN_SOCKET = "/run/atlas-proxy/admin.sock"
-CERT_DIRECTORY = "/var/lib/atlas-proxy/certs"
+# Paths mirror the stock Ubuntu `nginx` package (config /etc/nginx, state
+# /var/lib/nginx, socket /run/nginx, binary /usr/sbin/nginx) so the guest looks
+# like a default nginx box to anyone debugging it.
+ADMIN_SOCKET = "/run/nginx/admin.sock"
+CERT_DIRECTORY = "/var/lib/nginx/certs"
 # The guest file build.sh leaves empty and the proxy recipe's finalize step writes
 # the real region into (image_recipes._finalize_proxy); init_by_lua reads it.
-REGION_FILE = "/var/lib/atlas-proxy/region"
+REGION_FILE = "/var/lib/nginx/region"
 # The guest admin API answers HTTP over the unix socket; the host part is ignored
 # but curl needs one, so use a fixed placeholder.
 ADMIN_BASE = "http://localhost"
@@ -129,7 +132,7 @@ def push_cert(virtual_machine: str, fullchain: str, privkey: str) -> None:
 		stdout, stderr, code = run_ssh(
 			connection,
 			key_path,
-			f"{_point_cert_symlink_command(region)} && /opt/atlas-proxy/sbin/nginx -s reload",
+			f"{_point_cert_symlink_command(region)} && /usr/sbin/nginx -s reload",
 			timeout_seconds=60,
 		)
 	_record_guest_task(virtual_machine, "proxy-push-cert", {"region": region}, stdout, stderr, code)

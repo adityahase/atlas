@@ -126,7 +126,7 @@ def _finalize_proxy(virtual_machine, connection, key_path) -> tuple[str, str, in
 	region = virtual_machine.region
 	command = (
 		f"printf '%s\\n' {shlex.quote(region)} > {shlex.quote(REGION_FILE)} && "
-		"systemctl restart atlas-proxy.service"
+		"systemctl restart nginx.service"
 	)
 	return run_ssh(connection, key_path, command, timeout_seconds=120)
 
@@ -282,7 +282,7 @@ RECIPES: dict[str, "ImageRecipe"] = {
 		title="Reverse proxy image",
 		source_directory="proxy",
 		build_entrypoint="build.sh",
-		remote_directory="/tmp/atlas-proxy-build",
+		remote_directory="/tmp/nginx-build",
 		disk_gigabytes=10,
 		memory_megabytes=1024,
 		vcpus=2,
