@@ -58,9 +58,9 @@ bumping the nginx version.
   syntax is sugar for 10000 sockets, 10000 fds per worker), so the pool size is a
   real resource decision, not free — every port in the range is `bind()`+`listen()`'d
   at startup and re-opened on every reload, and carries a kernel socket struct per
-  worker. The proxy unit already raises `LimitNOFILE` to 1048576
-  ([nginx.service](../proxy/guest/nginx.service)); a 10000-port pool
-  per worker is comfortably within that. **`worker_connections` IS affected**:
+  worker. The proxy's systemd drop-in already raises `LimitNOFILE` to 1048576
+  ([nginx.service.d/atlas.conf](../proxy/guest/nginx.service.d/atlas.conf)); a
+  10000-port pool per worker is comfortably within that. **`worker_connections` IS affected**:
   nginx counts every listening socket against it, not just live connections, so it
   must clear the listener count (≈20000 for the v4+v6 pool, plus the http listeners
   and the two admin sockets) with headroom for real traffic — set to `65536`. (The

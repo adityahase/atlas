@@ -82,10 +82,13 @@ trail, the same row shape as every host Task.
 The proxy is built the Atlas-native way (no custom rootfs, no host service):
 provision an ordinary VM from stock Ubuntu, then `build_proxy(vm)` SSHes in,
 uploads the [`proxy/`](../proxy) tree, and runs
-[`proxy/build.sh`](../proxy/build.sh) inside the guest (compiles nginx 1.30.2 +
-OpenResty `luajit2` + `lua-nginx-module` + NDK + resty-core/lrucache + lua-cjson +
-headers-more from pinned sources, installs the stack + the three Lua modules +
-the guest unit), then **snapshot** it — that snapshot is the reusable "proxy
+[`proxy/build.sh`](../proxy/build.sh) inside the guest (`apt install`s the
+signed, `apt-mark hold`-frozen nginx.org stock nginx 1.30.3, compiles **only**
+the modules apt cannot supply — OpenResty `luajit2` + `lua-nginx-module` +
+stream-lua + NDK + resty-core/lrucache + lua-cjson + headers-more — as dynamic
+`.so`s against that exact binary, and installs the config, the six Lua modules,
+and a thin `nginx.service.d/atlas.conf` drop-in over the package's own unit),
+then **snapshot** it — that snapshot is the reusable "proxy
 image". Install / update / roll / rollback are the existing VM lifecycle verbs
 (provision / rebuild / snapshot / clone), rolled one proxy at a time so DNS keeps
 the others serving — a zero-downtime rolling update.
@@ -188,6 +191,61 @@ alternatives they beat, kept so a future change knows what it is overturning.
    canonical JSON (sorted keys, 2-space indent), so "in sync?" is a byte compare.
    Per-entry PUT/DELETE exist for low-latency single changes; the periodic full
    `/sync` is the backstop.
+7. **Stock nginx unless a custom part is *absolutely* necessary.** The base binary
+   is genuinely stock — `apt install`'d from the signed nginx.org repo,
+   dpkg-owned, `apt-mark hold`-frozen at 1.30.3, at stock paths
+   (`/usr/sbin/nginx`, `/etc/nginx`, `/var/log/nginx`, `/run/nginx.pid`), with the
+   L4 `stream` core taken straight from it. The build was audited for every place
+   it diverged from stock, and four reducible divergences were collapsed back:
+   the custom `mime.types` (deleted — `include /etc/nginx/mime.types` reads the
+   package conffile), the full `nginx.service` shadow + the standalone `tmpfiles.d`
+   file (replaced by a thin [`nginx.service.d/atlas.conf`](../proxy/guest/nginx.service.d/atlas.conf)
+   drop-in over the package unit, so `apt upgrade nginx` keeps shipping base-unit
+   fixes), and the hand-deleted `conf.d/default.conf` (left in place — deleting a
+   dpkg conffile desyncs dpkg; our `server_name _` default_server owns the slot
+   and `nginx.conf` simply never `include`s `conf.d`, guarded by a test). The
+   drop-in carries only the deltas with **no** stock equivalent:
+   `After=atlas-network.service` (order after the guest's static /128 v6 is up),
+   `ExecStartPre=nginx -t` (the nginx.org package unit ships *no* config precheck —
+   needed so a bad config refuses to start instead of restart-looping under
+   `Restart=on-failure`), `LimitNOFILE=1048576` (the ~20000-listener pool), and
+   `RuntimeDirectory=nginx`/`RuntimeDirectoryMode=0750` (the 0750-root
+   `/run/nginx` admin-socket dir). What **must** stay custom, judged and recorded
+   so a future change knows it is not gratuitous:
+   - **The `nginx.conf` overwrite** — `load_module`, the top-level `stream{}`
+     block, and `worker_connections 65536` cannot be injected by any stock drop-in
+     on this base. (`worker_connections 65536`: the gate empirically proved stock
+     1024 fails `nginx -t` against the ~20006 pre-opened listeners.)
+   - **The four dynamic modules** (lua, stream-lua, headers-more, NDK) — stream-lua
+     and headers-more are in no apt repo; Ubuntu's `libnginx-mod-http-lua` is
+     ABI-pinned to nginx 1.24 and the wrong version for resty-core 0.1.32's startup
+     assert. **luajit2** is the OpenResty fork (not upstream LuaJIT, no apt repo).
+     **lua-resty-core + lrucache** — nginx refuses to start without resty-core once
+     the Lua module loads; only in the OpenResty distribution. **lua-cjson** — stock
+     ships none and the apt one is the wrong interpreter ABI; it must be built
+     against the luajit2 fork.
+   - **The Lua app** (router/admin/persist × http+stream) — this *is* the
+     reload-free product. The stream trio is a forced second copy
+     ([17-tcp-proxy.md](./17-tcp-proxy.md): http/stream `lua_shared_dict`s are
+     separate address spaces, zone names globally unique across both).
+   - **The placeholder cert + region flat-symlink layout** — forced: a single
+     `443 ssl default_server` needs a readable cert for `nginx -t`/first boot
+     before Atlas pushes the DNS-01 wildcard, and `ssl_certificate` can't
+     interpolate `$atlas_region` ([13-tls.md](./13-tls.md)). Only the cert
+     *content* is substitutable; the layout must not be touched.
+   - **The `stream-admin` client + python3** — the stream admin is a non-HTTP line
+     protocol read off the raw socket; curl can't drive it, so the stdlib-only
+     client is required.
+   - **No logrotate snippet shipped** — the stock `/etc/logrotate.d/nginx` globs
+     `*.log` and already covers `admin.log` / `stream-access.log`; a redundant
+     snippet would be the gratuitous-custom we are avoiding.
+
+   The systemd drop-in is **host-boot-verifiable only** — the compose gate
+   foreground-runs nginx and never loads systemd. Two open tightenings, both weak
+   wins deferred: `user root;` → `user nginx;` (workers run as root on the
+   wildcard-key box for no reason; the master opens the 0600 cert and workers
+   inherit the fd), and swapping the placeholder cert *content* for the Debian
+   `ssl-cert` snakeoil.
 
 ## Accepted limitations
 
