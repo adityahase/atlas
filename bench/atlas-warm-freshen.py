@@ -34,6 +34,7 @@ MMDS_IP = "169.254.169.254"
 MMDS_URL = f"http://{MMDS_IP}/identity"
 VM_UUID_PATH = "/etc/atlas-vm-uuid"
 NETWORK_ENV_PATH = "/etc/atlas-network.env"
+ROUTING_ENV_PATH = "/etc/atlas-routing.env"
 POLL_SECONDS = 1.0
 
 # linux/random.h RNDRESEEDCRNG (_IO('R', 0x07)): force the kernel CRNG to
@@ -156,6 +157,16 @@ def _apply(identity: dict) -> None:
 	# nosemgrep: frappe-security-file-traversal -- guest script; writes the fixed NETWORK_ENV_PATH, not untrusted web input
 	with open(NETWORK_ENV_PATH, "w") as handle:
 		handle.write(network_env(identity))
+
+	# 3b. The routing env (spec/18): the warm-path analogue of the host's
+	# rootfs._write_routing_identity. The in-guest routing client reads the Atlas base
+	# URL from here to POST the register/deregister/check_label/list endpoints. Written
+	# only when the payload carries one (a non-bench golden carries none — the client
+	# then raises NotConfigured and no-ops).
+	routing_base_url = identity.get("routing_base_url", "")
+	if routing_base_url:
+		with open(ROUTING_ENV_PATH, "w") as handle:
+			handle.write(f"ATLAS_BASE_URL={routing_base_url}\n")
 
 	# 4. Clone-entropy hygiene: the seed was deleted at bake; keep it gone.
 	_run("rm", "-f", "/var/lib/systemd/random-seed")

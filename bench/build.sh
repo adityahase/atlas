@@ -159,6 +159,18 @@ install -m 0644 -o "$BENCH_USER" -g "$BENCH_USER" "$SRC_DIR/bench.toml" "$BENCH_
 # exactly as bench-setup.md does. ---
 as_frappe "source '$ADMIN_VENV/bin/activate' && bench -b '$BENCH_NAME' init"
 
+# --- 6b. Install the in-guest routing client (spec/18 Component D). The thin
+# "push" half of one-way self-service subdomain routing: the bench-cli new-site flow
+# runs `atlas-route register <label>` BEFORE creating the site (the authoritative
+# reservation; aborts on a non-zero exit) and `atlas-route deregister <label>` after
+# drop / as the create-failure rollback; `atlas-route list` clears strays on demand.
+# Stdlib-only, so the stock guest python3 runs it; reads the ONE non-secret file
+# /etc/atlas-routing.env the controller injects (no UUID, no token — caller resolution
+# is by source address). Raises NotConfigured / no-ops cleanly when no routing config
+# is present, so a non-Atlas bench is unaffected. Installed on EVERY golden (site +
+# admin), since a bench in either mode can spin up routable sites. ---
+install -m 0755 "$SRC_DIR/atlas-route-client.py" /usr/local/bin/atlas-route
+
 # --- 7. Site mode only: bake a fully-created Frappe + ERPNext site, taking the
 # heaviest per-signup costs (`bench new-site` + `install-app erpnext`) once here.
 # admin mode bakes no site — the clone's domain maps to the admin app instead. ---

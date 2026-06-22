@@ -35,6 +35,12 @@ class Identity:
 	# (no data disk, or format-and-mount disabled): inject_identity skips the
 	# fstab line entirely.
 	data_disk_mount_at: str = ""
+	# The Atlas controller base URL the in-guest routing client POSTs to (the
+	# register/deregister/check_label/list endpoints, spec/18) — the trusted-edge FQDN.
+	# Written to /etc/atlas-routing.env; empty means "no routing config" — the guest
+	# client then raises NotConfigured and no-ops, so an ordinary (non-bench) VM is
+	# unaffected. NON-SECRET, no token (caller resolution is by source address).
+	routing_base_url: str = ""
 
 	@property
 	def hostname(self) -> str:
@@ -131,6 +137,7 @@ def inject_identity(device: str, identity: Identity, *, regenerate_host_keys: bo
 		_write_hostname(mount_point, identity.hostname)
 		_ensure_host_keys(mount_point, identity.hostname, force=regenerate_host_keys)
 		_write_machine_id(mount_point, identity.machine_id)
+		_write_routing_identity(mount_point, identity)
 		if identity.data_disk_mount_at:
 			_write_data_fstab(mount_point, identity.data_disk_mount_at)
 
@@ -170,6 +177,31 @@ def _write_network_env(mount_point: str, identity: Identity) -> None:
 		f"VIRTUAL_MACHINE_IPV4_GATEWAY={identity.ipv4_gateway}\n"
 	)
 	install_file(content, f"{mount_point}/etc/atlas-network.env", mode="0644")
+
+
+def _write_routing_identity(mount_point: str, identity: Identity) -> None:
+	"""Write the ONE non-secret file the in-guest routing client reads (spec/18
+	"Identity injected into the guest"):
+
+	  /etc/atlas-routing.env — the Atlas controller base URL the guest POSTs to, the
+	                           FQDN of the trusted edge that overwrites X-Forwarded-For
+	                           (so caller resolution reads the real peer /128).
+
+	World-readable (0644): it carries NO secret and NO VM UUID — caller resolution is by
+	source address, so the guest never sends a VM-identifying value, and there is no
+	token to ride. Written only when a base URL was injected; absent it the guest client
+	raises NotConfigured and no-ops, so an ordinary (non-bench) VM is unaffected.
+
+	`/etc/atlas-vm-uuid` is NOT written here — it is not a routing dependency (spec/18
+	"`/etc/atlas-vm-uuid` is not a routing dependency"). It remains only the warm-freshen
+	adopted-identity marker (warm.sh + the freshen unit write it on the warm path);
+	deploy-site.py's warm gate reads that marker, never the cold path."""
+	if identity.routing_base_url:
+		install_file(
+			f"ATLAS_BASE_URL={identity.routing_base_url}\n",
+			f"{mount_point}/etc/atlas-routing.env",
+			mode="0644",
+		)
 
 
 def _write_hostname(mount_point: str, hostname: str) -> None:

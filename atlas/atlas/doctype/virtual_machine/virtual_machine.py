@@ -685,6 +685,7 @@ class VirtualMachine(Document):
 		self.status = "Terminated"
 		self.save()
 		self._detach_reserved_ip()
+		self._delete_subdomains()
 		self._delete_snapshots()
 		return task.name
 
@@ -694,6 +695,26 @@ class VirtualMachine(Document):
 		Reserved IP row survives — only the attachment is cleared."""
 		for name in frappe.get_all("Reserved IP", filters={"virtual_machine": self.name}, pluck="name"):
 			frappe.get_doc("Reserved IP", name).detach()
+
+	def _delete_subdomains(self) -> None:
+		"""Drop every Subdomain that routes to this VM, so terminating it stops routing
+		(each row's on_trash deconverges the regional proxy fleet). The leak fix
+		(spec/18 Component F): today ONLY `Site.terminate` cleans up Subdomains, so a VM
+		terminated directly — by the operator, or any non-`Site` path (a bench VM,
+		`Site.terminate`'s own backing-VM teardown after it already cleared its one
+		Subdomain) — would otherwise strand its routes on a /128 that `allocate_ipv6`
+		re-hands to the next tenant, a cross-tenant traffic leak.
+
+		A `Subdomain` is the LINKER (its `virtual_machine` field points AT this VM), so
+		deleting it is unobstructed by Frappe's link-integrity guard (which protects the
+		linked-TO doc) — unlike `Site._delete_subdomain`, which first clears the Site's
+		own Link field to the Subdomain. Idempotent: a VM with no Subdomains is a no-op.
+		`terminate()` is the ONLY controller-side teardown — there is deliberately NO
+		scheduled sweeper backstop (spec/18 Component F, "Why no sweeper"): because this
+		deletes a VM's rows in the same teardown that releases its /128, a row never
+		outlives its VM's address, so the case a sweeper would catch is closed here."""
+		for name in frappe.get_all("Subdomain", filters={"virtual_machine": self.name}, pluck="name"):
+			frappe.delete_doc("Subdomain", name, ignore_permissions=True)
 
 	def _delete_snapshots(self) -> None:
 		"""Drop this VM's snapshot rows after terminate. Each row's on_trash
@@ -801,6 +822,14 @@ class VirtualMachine(Document):
 			# inbound 1:1-NAT on first boot. Empty/None is dropped by the Task
 			# runner's flag rendering, leaving the env clean for ordinary VMs.
 			"RESERVED_IPV4": self.public_ipv4,
+			# The Atlas controller base URL written into the guest at
+			# /etc/atlas-routing.env — the trusted-edge FQDN a bench VM's in-guest routing
+			# client POSTs the register/deregister/check_label/list endpoints to (spec/18).
+			# NON-SECRET — uniform on every VM, like the MMDS device: a non-bench VM's guest
+			# client simply has no choke point that calls it. Empty (no request context,
+			# e.g. a bare `bench execute`) is dropped by the Task runner, leaving the env
+			# clean.
+			"ROUTING_BASE_URL": _routing_base_url(),
 		}
 		# Clone: seed the disk from a snapshot's rootfs instead of the pristine
 		# image. The kernel still comes from the image; provision-vm.py's image
@@ -825,6 +854,21 @@ class VirtualMachine(Document):
 		if self.clone_source_data_rootfs:
 			variables["DATA_SNAPSHOT_ROOTFS_PATH"] = self.clone_source_data_rootfs
 		return variables
+
+
+def _routing_base_url() -> str:
+	"""The Atlas controller base URL a guest's routing client POSTs to (spec/18).
+
+	`frappe.utils.get_url()` resolves the public site URL (honoring `host_name` /
+	the request host behind the proxy). Returns "" if it can't be resolved (no
+	configured host_name and no request context — e.g. a bare worker job before
+	host_name is set), which the Task runner drops, leaving /etc/atlas-routing.env
+	unwritten and the guest client a clean no-op. NON-SECRET, so there is no harm in
+	injecting it broadly."""
+	try:
+		return frappe.utils.get_url() or ""
+	except Exception:
+		return ""
 
 
 def _cgroup_values(interleaved: list[str]) -> list[str]:

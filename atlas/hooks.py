@@ -136,6 +136,10 @@ fixtures = [
 # before_install = "atlas.install.before_install"
 # after_install = "atlas.install.after_install"
 
+# Seed the brand denylist (spec/18 Component H) on every migrate, idempotently —
+# new labels only, so operator edits survive (a fixture would clobber them).
+after_migrate = "atlas.install.after_migrate"
+
 # Uninstallation
 # ------------
 
@@ -217,6 +221,14 @@ doc_events = {
 # renewal window (re-issue AND re-push to the region's proxies), mirroring the
 # proxy reconcile philosophy — the desired state (a fresh cert on every proxy) is
 # continuously restored. See spec/13-tls.md.
+#
+# NOTE — bench self-service subdomain routing (spec/18) is **one-way push**: the guest
+# register/deregister/lists its OWN routes over its egress and the controller writes
+# inline (the Subdomain hooks reconcile the proxy). There is deliberately **no
+# scheduled SSH pull and no sweeper** — teardown is `VirtualMachine.terminate()` alone
+# (Component F, total). Do NOT add a `reconcile_*`/`sweep_*` scheduler entry for it; a
+# scheduled scan was removed when the model went push-only (the unit test asserts this
+# list carries none).
 
 scheduler_events = {
 	"daily": [

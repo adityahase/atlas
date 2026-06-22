@@ -91,6 +91,12 @@ class ProvisionInputs(TaskInputs):
 	# One optional source override: a snapshot rootfs path (clone path). Empty
 	# means provision from the base image. Mirrors the shell's "${VAR:-}".
 	snapshot_rootfs_path: str = ""  # a snapshot's /dev/atlas/<name> device path
+	# Optional: the Atlas controller base URL the in-guest routing client POSTs to
+	# (spec/18 self-service subdomain routing). Written to /etc/atlas-routing.env on
+	# the cold path (via Identity) and carried in the warm clone's MMDS payload.
+	# Empty for a VM whose controller did not inject it — the guest client then
+	# no-ops, so an ordinary VM is unaffected. NON-SECRET (no token rides it).
+	routing_base_url: str = ""
 	# Optional: a Reserved IP attached to this VM (the VM's denormalized
 	# public_ipv4). Empty for every ordinary VM. Carried so a rebuild of a VM that
 	# already has an attached v4 re-creates its 1:1-NAT on first boot (the same
@@ -219,6 +225,7 @@ def main() -> None:
 				ipv4_guest_cidr=inputs.ipv4_guest_cidr,
 				ipv4_gateway=inputs.ipv4_gateway,
 				data_disk_mount_at=inputs.data_disk_mount_at,
+				routing_base_url=inputs.routing_base_url,
 			),
 			# Birth of the VM: establish a fresh SSH host identity. The base image
 			# ships SHARED baked host keys, and a clone seeds from another VM's
@@ -357,6 +364,7 @@ def _mmds_metadata(inputs: "ProvisionInputs") -> str:
 		ssh_public_key=inputs.ssh_public_key,
 		ipv4_guest_cidr=inputs.ipv4_guest_cidr,
 		ipv4_gateway=inputs.ipv4_gateway,
+		routing_base_url=inputs.routing_base_url,
 	)
 	return (
 		json.dumps(
@@ -369,6 +377,11 @@ def _mmds_metadata(inputs: "ProvisionInputs") -> str:
 					"ipv4_cidr": identity.ipv4_guest_cidr,
 					"ipv4_gateway": identity.ipv4_gateway,
 					"ssh_public_key": identity.ssh_public_key,
+					# The routing base URL (spec/18); the freshen unit writes it to
+					# /etc/atlas-routing.env when it adopts this clone's identity, the
+					# warm-path analogue of rootfs._write_routing_identity. Empty for a
+					# VM with no routing config — the guest client then no-ops.
+					"routing_base_url": identity.routing_base_url,
 				}
 			},
 			indent=1,
