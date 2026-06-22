@@ -70,8 +70,56 @@ deploy-site.py  per-VM deploy, run IN A CLONE over guest-SSH by
                 atlas.atlas.deploy_site (AS frappe): site mode RENAMEs
                 `sites/site.local` → the FQDN; admin mode sets `[admin].domain`;
                 both then `bench setup nginx` + reload — no admin reset, no restart
+atlas-route-client.py
+                the in-guest routing client (spec/18 Component D), installed at
+                /usr/local/bin/atlas-route. One-way push: `register <label>`
+                (BEFORE `bench new-site`) reserves the name; `deregister <label>`
+                (after drop / as create-failure rollback) removes it; `list` clears
+                strays. Stdlib-only, IPv6-only, no-ops with no routing config
 README.md       this file
 ```
+
+## Self-service subdomain routing (the in-guest client)
+
+A bench owner can `bench new-site <label>.<region>.frappe.dev` from inside the
+guest; spec/18 makes that site routable through the regional proxy with no operator
+action. The model is **one-way push**: the guest *tells* the controller what changed
+(it never reads the guest back — no pull, no sweeper), and the controller stays the
+single authoritative writer of the fleet-wide-unique `Subdomain` table, arbitrating
+every write (uniqueness, brand denylist, per-VM cap, own-VM scoping). The guest speaks
+via `atlas-route`:
+
+- `atlas-route register <label>` — POSTs the controller's `register`, the
+  AUTHORITATIVE reservation, run **before** `bench new-site`. Exits **non-zero** on
+  taken / reserved / at_limit / invalid (so the caller ABORTS before creating the
+  local site — block-at-create by ordering, no orphan), **0** on ok, and **0**
+  (fail-open) if the controller is unreachable or no routing config is present.
+- `atlas-route deregister <label>` — POSTs `deregister`, best-effort, ALWAYS exit 0.
+  Fired after `bench drop-site` AND as the rollback when `bench new-site` fails after
+  a successful register.
+- `atlas-route check-label <label>` — OPTIONAL pre-flight, early UX feedback only
+  (NOT the gate; `register` is). Non-zero on a decline, 0 on available.
+- `atlas-route list` — on-demand maintenance: lists this VM's routes, diffs against
+  on-disk `sites/`, and per-stray `deregister`s any routed label with no matching
+  site (the owner's self-service stray clear).
+
+**Caller resolution is by source address** — the client carries NO VM-identifying
+argument and POSTs over **IPv6** (the controller resolves the VM from the request's
+v6 source `/128`; a v4 POST has no per-VM source). It reads ONE **non-secret** file
+the controller injects (cold path: `rootfs.inject_identity`; warm path: the MMDS
+payload + `atlas-warm-freshen.py`): `/etc/atlas-routing.env` (`ATLAS_BASE_URL=…`, the
+trusted-edge FQDN). No UUID, no token. With no `/etc/atlas-routing.env` the client
+raises `NotConfigured` and no-ops, so a non-Atlas bench is unaffected.
+
+**bench-cli integration** (the moving dependency `build.sh` pins): the bench-cli
+`new_site` command runs `atlas-route register <label>` **before** it creates the site
+and aborts on a non-zero exit; `drop_site` (and `new_site` on failure) runs
+`atlas-route deregister <label>`. That wiring is a thin call gated on
+`/usr/local/bin/atlas-route` being present, so an ordinary bench (no client installed)
+behaves exactly as before. The contract the wiring depends on is this client's **typed
+surface** (the `Registered`/`Declined`/`Deregistered`/`Listing` result classes and the
+`RoutingError`/`NotConfigured`/`TransportError` exceptions), not stringly-typed status
+codes.
 
 ## Serving model (how a clone answers the proxy)
 

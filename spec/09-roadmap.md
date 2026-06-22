@@ -52,6 +52,17 @@ The next iteration moves to either:
 - Reusing addresses with a quarantine window (Task audit gets a "this
   address was used by VM X 2026-05-01..2026-05-04" lookup).
 
+A related, narrower guard is deferred for **subdomain routing**
+([18-bench-self-routing.md](./18-bench-self-routing.md) Component F): a `/128`
+should not be re-handed by `allocate_ipv6` while a `Subdomain` still references it
+(else a stale route briefly points at a recycled address — a cross-tenant leak).
+The v1 mitigation is `VirtualMachine.terminate()` deleting **all** of a VM's
+`Subdomain` rows as part of the same teardown that releases its `/128` — so a row
+never outlives its VM's address (the case the old address-drift sweeper guarded is
+closed structurally, which is why the routing model has no sweeper). The **reuse
+guard** — `allocate_ipv6` skipping any address still named by a live `Subdomain` — is
+the belt-and-suspenders follow-up.
+
 ### Host-key trust
 
 We use `StrictHostKeyChecking=accept-new`. First connection is
