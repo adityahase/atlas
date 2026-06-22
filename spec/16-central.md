@@ -124,16 +124,16 @@ drained by a minutely `scheduler_events` job for at-least-once delivery.
 ## The wire contract
 
 Atlas calls Central's whitelisted methods at
-`<url>/api/method/central.api.<name>` with
+`<url>/api/method/central.api.atlas.<name>` with
 `Authorization: token <api_key>:<api_secret>`. The methods Atlas expects:
 
 | Atlas call | Central method | Returns |
 | --- | --- | --- |
-| `ping` | `central.api.ping` | `{ label }` |
-| `register` | `central.api.register` | `{ atlas_id, label }` |
-| `fetch_sizes` | `central.api.sizes` | `[ { slug, title, vcpus, cpu_max_cores, memory_megabytes, disk_gigabytes, monthly_cost_usd } ]` |
-| `fetch_images` | `central.api.images` | `[ { image_name, title, series } ]` |
-| `post_event` | `central.api.event` | (ignored) |
+| `ping` | `central.api.atlas.ping` | `{ label }` |
+| `register` | `central.api.atlas.register` | `{ atlas_id, label }` |
+| `fetch_sizes` | `central.api.atlas.sizes` | `[ { slug, title, vcpus, cpu_max_cores, memory_megabytes, disk_gigabytes, monthly_cost_usd } ]` |
+| `fetch_images` | `central.api.atlas.images` | `[ { image_name, title, series } ]` |
+| `post_event` | `central.api.atlas.event` | (ignored) |
 
 The route names and payloads are the single external dependency; the whole
 contract is absorbed in `atlas/atlas/central.py` (`CentralClient`), so a change

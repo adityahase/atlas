@@ -5,14 +5,14 @@ many Atlas instances; Atlas is the *client*. This is the inverse of the Provider
 relationship — so the client mirrors atlas/atlas/digitalocean.py: a thin
 requests wrapper, one *Error type, dataclasses for the typed responses.
 
-Atlas calls Central's whitelisted methods at `<url>/api/method/central.api.<name>`
+Atlas calls Central's whitelisted methods at `<url>/api/method/central.api.atlas.<name>`
 with a `token <api_key>:<api_secret>` header (spec/16-central.md § "The wire
 contract"). Central owns the `Atlas Instance` registry: the operator pre-creates
 one row per region (with this Atlas's callback `api_key`/`api_secret`), and:
 
-- **ping** — `central.api.ping` returns `{label}`; a credential + reachability
+- **ping** — `central.api.atlas.ping` returns `{label}`; a credential + reachability
   check for the Test Connection toast.
-- **register** — `central.api.register` matches the operator-created row by
+- **register** — `central.api.atlas.register` matches the operator-created row by
   region and stamps a stable `atlas_id`, which Atlas then stores and reports on
   every event so Central can route them to this cluster.
 
@@ -32,11 +32,11 @@ DEFAULT_TIMEOUT = 30
 # Central method routes. Pinned in one place — the wire contract from
 # spec/16-central.md § "The wire contract".
 _ROUTES = {
-	"ping": "central.api.ping",
-	"register": "central.api.register",
-	"sizes": "central.api.sizes",
-	"images": "central.api.images",
-	"event": "central.api.event",
+	"ping": "central.api.atlas.ping",
+	"register": "central.api.atlas.register",
+	"sizes": "central.api.atlas.sizes",
+	"images": "central.api.atlas.images",
+	"event": "central.api.atlas.event",
 }
 
 

@@ -46,7 +46,7 @@ class TestCentralClient(IntegrationTestCase):
 			self.client.ping()
 		args, kwargs = request.call_args
 		self.assertEqual(args[0], "GET")
-		self.assertEqual(args[1], "https://central.example/api/method/central.api.ping")
+		self.assertEqual(args[1], "https://central.example/api/method/central.api.atlas.ping")
 		self.assertEqual(kwargs["headers"]["Authorization"], "token ak:secret")
 
 	def test_ping_ok(self) -> None:

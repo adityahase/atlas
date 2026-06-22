@@ -74,7 +74,7 @@ class CentralSettings(Document):
 		"""The registration payload Central matches against its operator-created
 		Atlas Instance row. Central keys on region; base_url is sent so the operator
 		can confirm the row points at this Atlas. Field names match Central's
-		`central.api.register` contract."""
+		`central.api.atlas.register` contract."""
 		region = self.region or frappe.conf.get("atlas_do_region")
 		if not region:
 			frappe.throw("Set a Region (or atlas_do_region in site config) before registering")
