@@ -308,6 +308,18 @@ def tunnel_listen_port(slot_index: int) -> int:
 	return TUNNEL_PORT_BASE + slot_index
 
 
+def tunnel_endpoint_address(server_name: str) -> str:
+	"""The address a tunnel client dials — the single seam for the private-VPC
+	future (spec/19-vpn-broker.md). Today the server's public IPv4, so an
+	IPv4-only client can connect and reach the v6-only VM over the tunnel; later a
+	private VPC address, swapped here with the Server's `transport`. Fails loud if
+	the server has no v4 (a misconfigured/Self-Managed host without one)."""
+	address = frappe.db.get_value("Server", server_name, "ipv4_address")
+	if not address:
+		raise frappe.ValidationError(f"Server {server_name} has no ipv4_address for a tunnel endpoint")
+	return address
+
+
 def allocate_tunnel_slot(server_name: str) -> int:
 	"""Lowest unused per-server tunnel slot index. Scans the server's VPN Tunnel
 	rows whose status is not Revoked — a Revoked tunnel has released its slot back

@@ -25,7 +25,14 @@ OPERATOR_ROLE = "System Manager"
 # DocTypes whose rows a user owns directly via Frappe's `owner` column. A
 # `Site Request` is created by a Guest and re-owned to the verified user at
 # fulfilment (spec/14-self-serve.md), so a user can see only their own requests.
-_OWNED_DOCTYPES = ("Virtual Machine", "Virtual Machine Snapshot", "SSH Key", "Site", "Site Request")
+_OWNED_DOCTYPES = (
+	"Virtual Machine",
+	"Virtual Machine Snapshot",
+	"SSH Key",
+	"Site",
+	"Site Request",
+	"VPN Tunnel",
+)
 
 
 def _is_operator(user: str) -> bool:
