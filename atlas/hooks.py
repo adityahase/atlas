@@ -185,6 +185,7 @@ permission_query_conditions = {
 	"Site": "atlas.atlas.permissions.owner_only",
 	"Site Request": "atlas.atlas.permissions.owner_only",
 	"VPN Tunnel": "atlas.atlas.permissions.owner_only",
+	"Firewall": "atlas.atlas.permissions.owner_only",
 	"Task": "atlas.atlas.permissions.task_by_owned_vm",
 }
 

@@ -32,6 +32,7 @@ _OWNED_DOCTYPES = (
 	"Site",
 	"Site Request",
 	"VPN Tunnel",
+	"Firewall",
 )
 
 
