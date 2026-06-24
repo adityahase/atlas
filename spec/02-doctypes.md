@@ -18,7 +18,7 @@ Read permission for `System Manager`.
 13. [Port Mapping](#port-mapping) — a raw-TCP forwarding entry: a proxy-side port pointing at a tenant VM's service port.
 14. [SSH Key](#ssh-key) — a user's public key, chosen when creating a VM.
 15. [Task](#task)
-16. [Route53 Settings](#route53-settings) — AWS Route 53 API config + the active `domain_provider_type` (Single).
+16. [Route53 Settings](#route53-settings) — AWS Route 53 API config (Single). The active DNS vendor lives on `Atlas Settings.dns_provider_type`.
 17. [Lets Encrypt Settings](#lets-encrypt-settings) — ACME account config (Single); the active TLS issuer is `Atlas Settings.tls_provider_type`.
 18. [Root Domain](#root-domain) — one wildcard zone == one region.
 19. [TLS Certificate](#tls-certificate) — the issued regional wildcard cert.
@@ -39,9 +39,9 @@ implementation plan.
 
 The **TLS & Domain layer** ([13-tls.md](./13-tls.md)) — the producer for the
 proxy's `push_cert` — mirrors that shape with two more registries keyed by type:
-`atlas/atlas/dns/` (a `DnsProvider` ABC per `domain_provider_type`, the active
-one on `Route53 Settings`) and `atlas/atlas/tls/` (a `TlsProvider` ABC per
-`tls_provider_type`, the active one on `Atlas Settings`). Same rule: controllers
+`atlas/atlas/dns/` (a `DnsProvider` ABC per `dns_provider_type`, the active
+one on `Atlas Settings`) and `atlas/atlas/tls/` (a `TlsProvider` ABC per
+`tls_provider_type`, also on `Atlas Settings`). Same rule: controllers
 resolve an implementation by type and never branch on the vendor.
 
 Each DocType is specified by three sections: **Fields** (the schema), **Form
@@ -63,7 +63,9 @@ Notation in the Form layout sections:
 
 A Single DocType. Holds Atlas-wide configuration that is not vendor-specific:
 which `provider_type` is currently active, which `tls_provider_type` issues
-certs, and the operator's SSH key (fingerprint, public-key body, on-disk path).
+certs, and the operator's SSH key (public-key body + on-disk private-key path).
+The *vendor's* handle for that key (`ssh_key_id`) is vendor-specific and lives on
+the per-vendor Settings instead (see DigitalOcean / Scaleway Settings below).
 Every `get_provider()` call in the codebase reads `Atlas Settings.provider_type`
 and resolves the implementation via `for_provider_type` — this is the
 indirection layer; there is no `Provider` row to load.
@@ -75,20 +77,25 @@ indirection layer; there is no `Provider` row to load.
 | `region`               | Data             | Y    | This Atlas instance's single region (e.g. `blr1`, `nyc3`) — the **one source of truth** for region. It is the proxy-fleet join key shared by `Subdomain` / `Site` / `Port Mapping` / proxy `Virtual Machine.region`, the label that separates this bench's servers in a shared cloud account (`provisioning.provision_region`), the value `Root Domain` denormalizes at insert, and the region announced to Central at Register. Read everywhere through `placement.atlas_region()`, which fails loud when unset. `bootstrap.py` seeds it from `atlas_tls_region` (else the active vendor's region key). Atlas is single-region, so there is exactly one value. |
 | `provider_type`        | Select           | Y    | The currently-active vendor: `DigitalOcean` / `Scaleway` / `Self-Managed` (`Fake` is also an option in `developer_mode` / test builds). `atlas.get_provider()` reads this and calls `for_provider_type` against the registry directly. Guarded in `validate()` (see below). |
 | `tls_provider_type`    | Select           |      | The active certificate issuer: `Let's Encrypt` / `ZeroSSL` / `Self-Managed`. Drives the TLS registry (`tls.for_tls_provider_type`); denormalized onto `Root Domain` / `TLS Certificate` at insert. See [13-tls.md](./13-tls.md). |
+| `dns_provider_type`    | Select           |      | The active DNS vendor (DNS-01 challenge): `Route53` / `Cloudflare`. Keys the DNS registry (`dns.for_dns_provider_type`); denormalized onto `Root Domain` at insert. Pairs with `Route53 Settings` for the credentials. Only Route53 implemented; Cloudflare reserved. See [13-tls.md](./13-tls.md). |
 | `fail_scripts`         | Small Text       |      | Developer-mode fault injection, shown only when `provider_type=Fake`. Comma/newline-separated script names whose Tasks the Fake provider makes FAIL; `*` fails every script. Read by `fake_tasks._configured_failure` (replaces the old per-`Provider`-row field). |
 | `default_user_image`   | Link → Virtual Machine Image | | Base image a dashboard user's new machine provisions from when they don't pick one. Disambiguates placement when several images are active. See [11-user-ui.md](./11-user-ui.md). |
 | `default_bench_snapshot` | Link → Virtual Machine Snapshot | | The golden bench snapshot a self-serve `Site`'s backing VM is cloned from (the baked bench + MariaDB + Redis, [08-images.md § golden bench image](./08-images.md)). `Site.before_insert` placement resolves it; provisioning clones via `Virtual Machine Snapshot.clone_to_new_vm`. Must be set + `Available` before any Site is created. See [14-self-serve.md](./14-self-serve.md). |
 | `overprovision_factor` | Float            |      | Fleet-wide vCPU oversubscription multiplier (default `1`). A host's *effective* vCPU budget — what `default_server` placement and the desk capacity helper check against — is its physical vCPU total times this factor. `1` means no oversubscription. Safe to raise because a VM's `vcpus` is a `cpu.max` *bandwidth* cap, not a pinned core. A host whose size has no known vCPU total (uncatalogued slug or self-managed) is unaffected — it always counts as having room. See [server_capacity.py](../atlas/atlas/api/server_capacity.py) and `placement.py`. |
 | `tcp_port_pool`        | Data             |      | Inclusive `LOW-HIGH` range (default `10000-19999`) of proxy-side ports the TCP forwarder allocates to `Port Mapping`s; must match the proxy nginx `listen` range. See [17-tcp-proxy.md](./17-tcp-proxy.md). |
-| `ssh_key_id`           | Data             |      | Vendor's handle for the uploaded SSH key, when the vendor needs one (DigitalOcean). Passed through to the provider as `SshKey.vendor_id`; format is vendor-specific (DO accepts the key's numeric id or its SHA-256 fingerprint). |
 | `ssh_public_key`       | Long Text        |      | OpenSSH public key body. Crosses the provider interface for vendors that upload at provision time. Not required for DO. |
 | `ssh_private_key_path` | Data             | Y    | Absolute path on the Atlas host where the matching private key lives. Atlas reads the PEM at SSH-connect time via `secrets.get_ssh_key_from_disk(path)`. `0600`, owned by the Frappe user. |
 
-Why these live on one Single instead of per-vendor rows: the SSH key, the
-active `provider_type`, the active `tls_provider_type`, and any other
-cross-vendor switch are properties of the Atlas instance, not of a vendor.
-Routing reads through a single helper also lets the storage backend swap to an
-external secret store later without touching callers.
+Why these live on one Single instead of per-vendor rows: the SSH *keypair* (the
+public-key body and the on-disk private key), the active `provider_type`, the
+active `tls_provider_type`, and any other cross-vendor switch are properties of
+the Atlas instance, not of a vendor. The vendor's *handle* for that key
+(`ssh_key_id` — DO's key id / fingerprint, Scaleway's IAM id) is the exception:
+it is meaningless outside its vendor, so it lives on the per-vendor Settings.
+`get_ssh_key()` assembles the two — the cross-vendor public key from this Single,
+the `vendor_id` from the active vendor's Single — so callers still see one
+`SshKey`. Routing reads through a single helper also lets the storage backend
+swap to an external secret store later without touching callers.
 
 ### Form layout
 
@@ -96,6 +103,7 @@ external secret store later without touching callers.
 ── Active provider ──
 provider_type
 | tls_provider_type
+  dns_provider_type
   fail_scripts
 ── User dashboard ──
 default_user_image
@@ -105,7 +113,6 @@ overprovision_factor
 ── TCP proxy ──
 tcp_port_pool
 ── SSH key ──
-ssh_key_id
 ssh_public_key
 | ssh_private_key_path
 ```
@@ -182,6 +189,7 @@ A Single DocType. Only fields that DigitalOcean's API needs.
 | --------------- | --------------------- | ---- | ------------------------------------------------------------------ |
 | `api_token`     | Password              | Y    | `set_only_once`. DigitalOcean personal access token. Rotate by clearing the field via `db.set_value`, then re-saving. |
 | `region`        | Data                  | Y    | DO is multi-region; Atlas is single-region. Pick one (`blr1`, `nyc3`, …). `provision_server` throws if the dialog overrides this. |
+| `ssh_key_id`    | Data                  |      | DO's handle for the uploaded SSH key, installed on each new droplet. Accepts the key's numeric id or its SHA-256 fingerprint. Passed through to the provider as `SshKey.vendor_id`; `get_ssh_key()` reads it from here when DO is active. Vendor-specific — meaningless to other providers. |
 | `default_size`  | Link → Provider Size  | Y    | Filtered to `provider_type=DigitalOcean, enabled=1`. Default selection in the Provision dialog. |
 | `default_image` | Link → Provider Image | Y    | Same filter as `default_size`.                                     |
 
@@ -190,6 +198,7 @@ A Single DocType. Only fields that DigitalOcean's API needs.
 ```
 api_token
 region
+ssh_key_id
 ── Defaults for new servers ──
 default_size
 | default_image
@@ -222,6 +231,7 @@ Mirrors `DigitalOcean Settings` — same shape, vendor-specific fields.
 | `organization_id` | Data                  |      | Optional. Filters `GET /account/v3/projects` and labels the authenticate result. |
 | `zone`            | Data                  | Y    | Scaleway is multi-zone; Atlas is single-region per vendor. One Elastic Metal zone (`fr-par-1`, `fr-par-2`, `nl-ams-1`, `nl-ams-2`, `pl-waw-2`, `pl-waw-3` — **not** `pl-waw-1`). |
 | `billing`         | Select                |      | `hourly` (default) / `monthly`. Hourly has no upfront fee; monthly is cheaper to run but charges a one-time, non-refundable commitment fee. Hourly and monthly are **distinct offer ids**, so `discover()` filters offers to this mode. |
+| `ssh_key_id`      | Data                  |      | Scaleway's IAM SSH key id, installed on each new Elastic Metal server. Left blank, the provider registers `Atlas Settings.ssh_public_key` with IAM at provision time; an operator with a cached IAM id can set it here to reuse the key. Read as `SshKey.vendor_id` by `get_ssh_key()` when Scaleway is active. Vendor-specific. |
 | `default_size`    | Link → Provider Size  | Y    | Filtered to `provider_type=Scaleway, enabled=1`. |
 | `default_image`   | Link → Provider Image | Y    | Same filter as `default_size`. |
 
@@ -233,6 +243,7 @@ project_id
 organization_id
 zone
 billing
+ssh_key_id
 ── Defaults for new servers ──
 default_size
 | default_image
@@ -514,7 +525,8 @@ methods (Provision/Start/Stop/Restart/Terminate); see
 `ssh_public_key` is the key injected into the *guest's*
 `/root/.ssh/authorized_keys` — it is how the operator SSHes into the
 VM, not into the host. The host key lives on `Atlas Settings`
-(`ssh_key_id`, `ssh_public_key`, `ssh_private_key_path`).
+(`ssh_public_key`, `ssh_private_key_path`); the vendor's handle for it
+(`ssh_key_id`) lives on the active vendor's Settings.
 
 ### Auto-provision contract
 
@@ -1298,17 +1310,18 @@ Tasks aren't a black box.
 
 ## Route53 Settings
 
-A Single. AWS Route 53 credentials plus the active DNS vendor type, the twin of
+A Single. AWS Route 53 credentials, the twin of
 [DigitalOcean Settings](#digitalocean-settings). Read by `Route53DnsProvider`;
-the secret comes out via `atlas.atlas.secrets.get_secret`. There is no separate
-`Domain Provider` DocType — the active DNS vendor is the `domain_provider_type`
-field below, and the DNS registry keys off it (`dns.for_dns_provider_type`).
+the secret comes out via `atlas.atlas.secrets.get_secret`. The *active* DNS vendor
+is not stored here — it lives on `Atlas Settings.dns_provider_type` (the DNS
+registry keys off it, `dns.for_dns_provider_type`), since it is an
+Atlas-instance switch, not a Route 53 credential. There is no separate
+`Domain Provider` DocType.
 
 ### Fields
 
 | Field                  | Type     | Reqd | Notes                                                          |
 | ---------------------- | -------- | ---- | -------------------------------------------------------------- |
-| `domain_provider_type` | Select   | Y    | The active DNS vendor: `Route53` / `Cloudflare`. Keys the DNS registry (`dns.for_dns_provider_type`); denormalized onto `Root Domain` at insert. Only Route53 implemented; Cloudflare reserved. |
 | `access_key_id`        | Data     | Y    | AWS IAM access key id with `route53:*` on the zone. `set_only_once`. |
 | `secret_access_key`    | Password | Y    | AWS IAM secret. Rotate by clearing via `db.set_value`, then re-saving. |
 | `region`               | Data     |      | AWS API region for signing (default `us-east-1`; Route 53 is global). |
@@ -1319,7 +1332,6 @@ name at issue time.
 ### Form layout
 
 ```
-domain_provider_type
 ── AWS credentials ──
 access_key_id
 secret_access_key
@@ -1328,7 +1340,7 @@ region
 
 ### Buttons
 
-- **Test Connection** — `dns.for_dns_provider_type(domain_provider_type).authenticate()`
+- **Test Connection** — `dns.for_dns_provider_type(Atlas Settings.dns_provider_type).authenticate()`
   (Route 53 lists hosted zones). Result surfaces via a toast; no auto-painted
   indicator.
 
@@ -1351,14 +1363,17 @@ keeps the apostrophe (`Let's Encrypt`) since that is data, not a module.
 | ------------------- | ---- | ---- | ------- | ------------------------------------------------------ |
 | `acme_directory_url`| Data | Y    | LE production directory | Use the staging URL while testing. |
 | `account_email`     | Data | Y    |         | ACME registration / expiry-notice email. `set_only_once`. |
-| `agree_tos`         | Check|      | 0       | Required before any certificate can be issued. |
+
+There is no agree-to-ToS field: certbot is always invoked with `--agree-tos`
+([scripts/lib/atlas/certs.py](../scripts/lib/atlas/certs.py)), so registering the
+ACME account agrees to the terms — a separate checkbox could only ever hold one
+valid value.
 
 ### Form layout
 
 ```
 acme_directory_url
 account_email
-agree_tos
 ```
 
 ### Buttons
@@ -1383,7 +1398,7 @@ wildcard cert `*.blr1.frappe.dev` that fronts the proxy fleet in `region`.
 | `domain`          | Data                  | Y    | The wildcard zone, e.g. `blr1.frappe.dev`. `unique`, `set_only_once`. The cert is `*.<domain>`. |
 | `region`          | Data                  |      | The proxy fleet this domain fronts. Join key to `Virtual Machine.region`. Read-only; denormalized from `Atlas Settings.region` (the single source of truth) at insert — the operator does not type it. `set_only_once`. |
 | `is_active`       | Check                 |      | Default 1. |
-| `domain_provider_type` | Select           |      | The DNS vendor that owns the zone (DNS-01). Read-only; denormalized from `Route53 Settings.domain_provider_type` at insert. |
+| `dns_provider_type`    | Select           |      | The DNS vendor that owns the zone (DNS-01). Read-only; denormalized from `Atlas Settings.dns_provider_type` at insert. |
 | `tls_provider_type`    | Select           |      | The issuer that produces the cert. Read-only; denormalized from `Atlas Settings.tls_provider_type` at insert. |
 
 `domain` and `region` lock after insert. `common_name` (`*.<domain>`) is a derived
@@ -1404,7 +1419,7 @@ domain
 region
 | is_active
 ── Providers ──
-domain_provider_type
+dns_provider_type
 tls_provider_type
 ```
 

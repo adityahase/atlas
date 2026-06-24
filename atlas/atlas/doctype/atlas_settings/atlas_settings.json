@@ -11,6 +11,7 @@
   "provider_type",
   "column_break_provider",
   "tls_provider_type",
+  "dns_provider_type",
   "fail_scripts",
   "section_break_user_dashboard",
   "default_user_image",
@@ -59,6 +60,13 @@
    "label": "TLS Provider Type",
    "options": "\nLet's Encrypt\nZeroSSL\nSelf-Managed",
    "description": "The active certificate issuer. The TLS registry maps this to the registered TlsProvider; Root Domain / TLS Certificate denormalize it at insert. Pairs with Lets Encrypt Settings for the ACME account."
+  },
+  {
+   "fieldname": "dns_provider_type",
+   "fieldtype": "Select",
+   "label": "DNS Provider Type",
+   "options": "\nRoute53\nCloudflare",
+   "description": "The active DNS vendor (DNS-01 challenge). The DNS registry maps this to the registered DnsProvider (dns.for_dns_provider_type); Root Domain denormalizes it at insert. Pairs with Route53 Settings for the credentials. Only Route53 is implemented; Cloudflare is reserved."
   },
   {
    "fieldname": "fail_scripts",

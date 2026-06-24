@@ -65,7 +65,7 @@ class TLSCertificate(Document):
 		domain_row = frappe.get_doc("Root Domain", self.root_domain)
 		try:
 			tls_provider = tls.for_tls_provider_type(domain_row.tls_provider_type)
-			dns_provider = dns.for_dns_provider_type(domain_row.domain_provider_type)
+			dns_provider = dns.for_dns_provider_type(domain_row.dns_provider_type)
 			issued = tls_provider.issue(domain_row.domain, dns_provider)
 		except Exception:
 			self._set_status("Failed")
@@ -133,7 +133,7 @@ class TLSCertificate(Document):
 			)
 			return
 		try:
-			dns_provider = dns.for_dns_provider_type(domain_row.domain_provider_type)
+			dns_provider = dns.for_dns_provider_type(domain_row.dns_provider_type)
 			records = dns_provider.upsert_wildcard(
 				domain_row.domain, dns.WildcardTargets(ipv4=ipv4, ipv6=ipv6)
 			)

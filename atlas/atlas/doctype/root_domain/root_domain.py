@@ -35,8 +35,8 @@ class RootDomain(Document):
 		"""Freeze the active DNS / TLS vendor types onto the row, so a later vendor
 		switch on the Settings singles never re-points an existing region's issuance.
 		Mirrors `Server.provider_type`."""
-		if not self.domain_provider_type:
-			self.domain_provider_type = frappe.db.get_single_value("Route53 Settings", "domain_provider_type")
+		if not self.dns_provider_type:
+			self.dns_provider_type = frappe.db.get_single_value("Atlas Settings", "dns_provider_type")
 		if not self.tls_provider_type:
 			self.tls_provider_type = frappe.db.get_single_value("Atlas Settings", "tls_provider_type")
 
@@ -51,8 +51,8 @@ class RootDomain(Document):
 		blank means they were never configured."""
 		from frappe import _
 
-		if not self.domain_provider_type:
-			frappe.throw(_("Set Route53 Settings.domain_provider_type before creating a Root Domain"))
+		if not self.dns_provider_type:
+			frappe.throw(_("Set Atlas Settings.dns_provider_type before creating a Root Domain"))
 		if not self.tls_provider_type:
 			frappe.throw(_("Set Atlas Settings.tls_provider_type before creating a Root Domain"))
 

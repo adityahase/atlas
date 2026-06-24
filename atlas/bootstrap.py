@@ -77,8 +77,9 @@ Optional TLS tail (run via `atlas.bootstrap.run_with_proxy`):
 
 `run()` stops at the first VM (compute only). `run_with_proxy()` runs `run()` and
 then, IF the TLS config keys below are all present, seeds the domain + TLS layer
-(Domain Provider, Route53 Settings, TLS Provider, Lets Encrypt Settings, Root
-Domain) and issues the regional wildcard via Let's Encrypt over Route 53 DNS-01 —
+(the active DNS / TLS vendor types on Atlas Settings, Route53 Settings, Lets
+Encrypt Settings, Root Domain) and issues the regional wildcard via Let's Encrypt
+over Route 53 DNS-01 —
 the same chain the desk's **Issue / Renew Certificate** button drives. The cert is
 pushed to every proxy VM in the region (none yet at bootstrap, so the push is a
 no-op until a proxy exists). Requires certbot + certbot-dns-route53 + openssl +
@@ -781,8 +782,8 @@ def _read_tls_config() -> dict | None:
 
 def ensure_tls_layer(config: dict) -> None:
 	"""Seed the domain + TLS layer from config, idempotently — the same rows the
-	desk first-run order creates (spec/13-tls.md): Domain Provider, Route53
-	Settings, TLS Provider, Lets Encrypt Settings, Root Domain."""
+	desk first-run order creates (spec/13-tls.md): the active DNS / TLS vendor
+	types on Atlas Settings, Route53 Settings, Lets Encrypt Settings, Root Domain."""
 	import frappe.utils.password
 
 	frappe.db.set_single_value(
@@ -799,9 +800,9 @@ def ensure_tls_layer(config: dict) -> None:
 		"Lets Encrypt Settings", "account_email", config["account_email"], update_modified=False
 	)
 
-	# The active DNS / TLS vendor types now live on the Settings singles; Root Domain
+	# The active DNS / TLS vendor types live on Atlas Settings; Root Domain
 	# denormalizes them at insert (its before_insert reads them).
-	frappe.db.set_single_value("Route53 Settings", "domain_provider_type", "Route53", update_modified=False)
+	frappe.db.set_single_value("Atlas Settings", "dns_provider_type", "Route53", update_modified=False)
 	frappe.db.set_single_value("Atlas Settings", "tls_provider_type", "Let's Encrypt", update_modified=False)
 	if not frappe.db.exists("Root Domain", config["domain"]):
 		frappe.get_doc(

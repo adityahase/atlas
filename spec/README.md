@@ -143,9 +143,10 @@ The operator-visible setup order on the desk is:
 
 1. **Atlas Settings** — the active `provider_type` (the vendor this
    instance provisions through), the active `tls_provider_type`, and the
-   SSH key (fingerprint, public key, on-disk path).
+   SSH key (public-key body + on-disk private-key path).
 2. **Per-vendor Settings** (e.g. `DigitalOcean Settings`) — API token,
-   region, default size + image. Skip for `Self-Managed`.
+   region, the vendor's SSH key handle (`ssh_key_id`), default size + image.
+   Skip for `Self-Managed`.
 3. **Server** — provisioned by clicking **Provision Server** on
    **Atlas Settings**.
 4. **Virtual Machine Image** — the kernel + rootfs pair to install.
@@ -170,10 +171,10 @@ The file's docstring lists every config key.
 To put a site behind a real cert, layer the proxy ([12-proxy.md](./12-proxy.md))
 and TLS ([13-tls.md](./13-tls.md)) setup on top:
 
-6. **Route53 Settings** — the DNS account (DNS-01); pick the
-   `domain_provider_type` (`Route53`).
+6. **Route53 Settings** — the DNS account (DNS-01); pick the active DNS vendor
+   on `Atlas Settings.dns_provider_type` (`Route53`).
 7. **Lets Encrypt Settings** — the ACME account (directory URL, account
-   email, agree-to-ToS); the active issuer is `Atlas Settings.tls_provider_type`.
+   email); the active issuer is `Atlas Settings.tls_provider_type`.
 8. **Root Domain** — one row per region (`<region>.frappe.dev`, `region`);
    click **Issue / Renew Certificate** to issue the regional wildcard and push
    it onto every proxy VM in the region. The domain/TLS vendor types are
@@ -188,8 +189,8 @@ bench --site <site> execute atlas.bootstrap.run_with_proxy
 
 `run_with_proxy` is `run` plus the TLS tail: it does the compute bootstrap, then
 — only if the `atlas_tls_domain` + Route 53 + ACME config keys are present —
-writes the domain/TLS vendor types (`Atlas Settings.tls_provider_type`,
-`Route53 Settings.domain_provider_type`), the two per-vendor Settings, and the
+writes the DNS/TLS vendor types (`Atlas Settings.dns_provider_type`,
+`Atlas Settings.tls_provider_type`), the two per-vendor Settings, and the
 `Root Domain` row, then issues the regional wildcard (defaulting to
 Let's Encrypt **staging** so an unattended run never burns production quota; set
 `atlas_acme_directory_url` for a trusted cert). Absent those keys it skips the
