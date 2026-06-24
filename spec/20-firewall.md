@@ -119,5 +119,8 @@ client of it.
   sources and port ranges are a later refinement.
 - **Inter-VM traffic** stays as today (the forward chain's per-VM accepts); the
   firewall governs the *public uplink*, not VM↔VM.
-- **The SPA/Desk UI** lands with the rest of the user dashboard
-  ([11-user-ui.md](./11-user-ui.md)); core (doctype + host mechanism) is first.
+- **The Desk UI is built** (`firewall.js`): a `Firewall` form with the allowed-port
+  table and an **Apply to host** button (the explicit apply verb — a plain Save
+  never SSHes), linked off the Virtual Machine dashboard ("Network access") and the
+  Atlas workspace. **The SPA surface** still lands with the rest of the user
+  dashboard ([11-user-ui.md](./11-user-ui.md)).

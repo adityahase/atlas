@@ -53,6 +53,8 @@ doctype_js = {
 	"Virtual Machine Image": "public/js/atlas_form_overrides.js",
 	"Virtual Machine Snapshot": "public/js/atlas_form_overrides.js",
 	"Reserved IP": "public/js/atlas_form_overrides.js",
+	"VPN Tunnel": "public/js/atlas_form_overrides.js",
+	"Firewall": "public/js/atlas_form_overrides.js",
 	"Task": "public/js/atlas_form_overrides.js",
 	"Route53 Settings": "public/js/atlas_form_overrides.js",
 	"Lets Encrypt Settings": "public/js/atlas_form_overrides.js",

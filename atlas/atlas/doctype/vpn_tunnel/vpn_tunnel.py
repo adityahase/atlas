@@ -114,6 +114,19 @@ class VPNTunnel(Document):
 		return task.name
 
 	@frappe.whitelist()
+	def client_config(self) -> dict:
+		"""The ready-to-use client payload (host public key, endpoint, AllowedIPs,
+		overlay address, copy-paste `config`, setup steps) for an Active tunnel.
+
+		Only meaningful once the host has minted its key on bring-up, so it is
+		guarded on Active. Lazy import to avoid a controller↔api cycle at load."""
+		if self.status != "Active":
+			frappe.throw(_("Client config is only available once the tunnel is Active"))
+		from atlas.atlas.api.tunnel import _client_config
+
+		return _client_config(self)
+
+	@frappe.whitelist()
 	def revoke(self) -> str:
 		"""Tear the tunnel down on the host and mark Revoked, releasing its slot.
 

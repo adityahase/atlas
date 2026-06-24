@@ -45,7 +45,6 @@
    "in_standard_filter": 1,
    "label": "Virtual Machine",
    "options": "Virtual Machine",
-   "read_only": 1,
    "reqd": 1
   },
   {
@@ -98,7 +97,6 @@
    "fieldname": "client_public_key",
    "fieldtype": "Data",
    "label": "Client Public Key",
-   "read_only": 1,
    "reqd": 1
   },
   {

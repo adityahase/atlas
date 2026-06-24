@@ -282,10 +282,14 @@ inner/isolation model.
 
 ## Not in this iteration
 
-- **Desk UI and the real-droplet e2e** land in a follow-up: an operator form +
-  buttons, and a `vpn_tunnel` use case that, on a live droplet, completes a
-  handshake, reaches the owned VM, **proves it cannot reach a second VM** (the
-  isolation host fact), then revokes.
+- **The Desk UI is built** (`vpn_tunnel.js`): a `VPN Tunnel` form with state-gated
+  buttons — Pending → **Bring up** / **Revoke**; Active → **Show client config**
+  (a dialog with the copy-paste `.conf` and the client setup steps), **Re-apply**,
+  **Revoke**. The form links off the Virtual Machine dashboard ("Network access")
+  and the Atlas workspace. **The real-droplet e2e** still lands in a follow-up: a
+  `vpn_tunnel` use case that, on a live droplet, completes a handshake, reaches the
+  owned VM, **proves it cannot reach a second VM** (the isolation host fact), then
+  revokes.
 - **No multi-VM / mesh tunnel.** One tunnel reaches one VM (the no-overlay
   non-goal).
 - **No v4 *into* the VM over the tunnel.** Inner reach is the VM's v6 `/128`; a
