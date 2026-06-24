@@ -61,9 +61,9 @@ def default_server(required_vcpus: float) -> str:
 	`effective_vcpus is None` and are treated as having unlimited room: the
 	operator vouches for them by marking them Active. Raises when nothing fits.
 
-	Runs with ignore_permissions: this is system placement, not user-facing
-	data access. The Atlas User who triggers it cannot read Server at all (by
-	design) — but the system still has to choose one for them."""
+	Runs with ignore_permissions: this is system placement, not desk RBAC —
+	Central (the operator) triggers it without needing Server read access; the
+	system still has to choose one."""
 	from atlas.atlas.api.server_capacity import capacity_for_server
 
 	servers = frappe.get_all(

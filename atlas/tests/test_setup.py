@@ -3,8 +3,8 @@
 
 The contract is pure logic — no host, no network except the providers' `discover()`,
 which we mock (the only network call, exactly as `test_bootstrap.py` does). We assert
-the Singles / catalog / Root Domain / Email Account a `setup.run(config)` writes match
-what `bootstrap.run` wrote before this change, per provider x TLS on/off x email on/off.
+the Singles / catalog / Root Domain a `setup.run(config)` writes match what
+`bootstrap.run` wrote before this change, per provider x TLS on/off.
 
 Region distinction (the load-bearing fix): `Atlas Settings.region` is THIS Atlas's
 single region (the source of truth); the vendor's OWN region/zone
@@ -91,14 +91,6 @@ _TLS_BLOCK = {
 	"aws_region": "eu-west-1",
 	"account_email": "ops@example.com",
 	"acme_directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
-}
-
-_EMAIL_BLOCK = {
-	"host": "smtp.example.com",
-	"port": 2525,
-	"login": "mailer@example.com",
-	"password": "smtp-secret",
-	"from": "noreply@example.com",
 }
 
 
@@ -198,18 +190,6 @@ class TestSetupContract(IntegrationTestCase):
 		setup.run(_do_config())
 		self.assertFalse(frappe.db.exists("Root Domain", "blr1.frappe.dev"))
 
-	# --- email block ------------------------------------------------------
-
-	def test_email_block_configures_account(self) -> None:
-		setup.run(_do_config(email=_EMAIL_BLOCK))
-		self.assertTrue(frappe.db.exists("Email Account", "Atlas Outbound"))
-		account = frappe.get_doc("Email Account", "Atlas Outbound")
-		self.assertEqual(account.smtp_server, "smtp.example.com")
-		self.assertEqual(int(account.smtp_port), 2525)
-		self.assertEqual(account.email_id, "noreply@example.com")
-		# login differs from From → login_id_is_different flagged.
-		self.assertEqual(account.login_id_is_different, 1)
-
 	# --- self-managed networking is NOT a Single --------------------------
 
 	def test_self_managed_networking_returned_not_stored(self) -> None:
@@ -287,15 +267,15 @@ class TestWizardStages(IntegrationTestCase):
 		args.update(over)
 		return args
 
-	def test_stages_provider_only_when_tls_and_email_off(self) -> None:
+	def test_stages_provider_only_when_tls_off(self) -> None:
 		stages = setup.get_setup_stages(self._do_args())
 		self.assertEqual(len(stages), 1)
 
-	def test_stages_include_tls_and_email_when_checked(self) -> None:
+	def test_stages_include_tls_when_checked(self) -> None:
 		# Checkboxes arrive as the string "1" from the wizard.
-		args = self._do_args(setup_tls="1", setup_email="1")
+		args = self._do_args(setup_tls="1")
 		stages = setup.get_setup_stages(args)
-		self.assertEqual(len(stages), 3)
+		self.assertEqual(len(stages), 2)
 
 	def test_provider_stage_applies_setters(self) -> None:
 		args = self._do_args()
@@ -363,6 +343,4 @@ def _cleanup() -> None:
 			frappe.delete_doc("Provider Image", name, force=True, ignore_permissions=True)
 	if frappe.db.exists("Root Domain", "blr1.frappe.dev"):
 		frappe.delete_doc("Root Domain", "blr1.frappe.dev", force=True, ignore_permissions=True)
-	if frappe.db.exists("Email Account", "Atlas Outbound"):
-		frappe.delete_doc("Email Account", "Atlas Outbound", force=True, ignore_permissions=True)
 	frappe.db.commit()

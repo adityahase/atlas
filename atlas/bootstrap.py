@@ -121,7 +121,6 @@ persist. The flow, in dependency order:
                                     (needs the proxy + reserved IP to exist first,
                                     which is why it runs AFTER step 4, not in
                                     `run_with_proxy`'s pre-proxy order)
-  6. `ensure_outbound_email()`    — the SMTP account the verification mail sends from
 
 It is billable: one droplet + a build VM + a proxy VM + one DO reserved IPv4, all
 left running. It needs the TLS config keys (`atlas_tls_*`), certbot + boto3 on the
@@ -131,8 +130,8 @@ the operator's turn:
     bench --site <site> execute atlas.bootstrap.run_self_serve
 
 The older `run_with_self_serve()` is kept as the *settings-only* tail (wire an
-already-baked snapshot + email, skip the billable bake/proxy) for the case where
-the golden image + proxy already exist; `run_self_serve()` is the from-scratch
+already-baked snapshot, skip the billable bake/proxy) for the case where the
+golden image + proxy already exist; `run_self_serve()` is the from-scratch
 one-shot the wiped-site bootstrap uses.
 
     atlas_default_bench_snapshot     golden bench Virtual Machine Snapshot name. If
@@ -140,11 +139,6 @@ one-shot the wiped-site bootstrap uses.
                                      SKIPS the bake; else it bakes a fresh one. (The
                                      settings-only `run_with_self_serve` adopts the
                                      newest Available golden-bench* if this is unset.)
-    atlas_smtp_host                  outbound SMTP server (omit to skip email setup)
-    atlas_smtp_port                  SMTP port (default 587)
-    atlas_smtp_login                 SMTP username
-    atlas_smtp_password              SMTP password
-    atlas_smtp_from                  From address (default: the SMTP login)
 """
 
 import os
@@ -314,9 +308,6 @@ def run_self_serve(force_bake: bool = False) -> None:
 	#    Now that the proxy + reserved IP exist, the push actually lands.
 	issue_certificate(tls_config["domain"])
 	push_certificate_to_proxies(tls_config["domain"])
-
-	# 6. Outbound email so the verification mail sends (skips with a note if unset).
-	ensure_outbound_email()
 
 	_print_self_serve_summary(server_name, proxy_vm_name, tls_config["domain"])
 
@@ -884,43 +875,39 @@ def _print_self_serve_summary(server_name: str, proxy_vm_name: str, domain: str)
 	):
 		print(f"  {label:<16} {value}")
 	print("")
-	print(f"  /signup now provisions sites at <sub>.{domain} (v4 + v6).")
+	print(f"  Central can now create sites at <sub>.{domain} (v4 + v6).")
 	print("=" * 64)
 
 
 def run_with_self_serve() -> None:
 	"""`run_with_proxy()` plus the self-serve tail: wire the golden bench snapshot
-	and outbound email so a fresh site can take a public `/signup`.
+	so Central can create a site (`atlas.atlas.api.site.create_site`).
 
 	The compute + proxy + TLS bootstrap (`run_with_proxy`) always happens first —
 	it seeds the Root Domain that `Site.before_insert` resolves the region + FQDN
 	suffix from (spec/14, Contract A), so self-serve has no separate domain step.
-	Then two settings the signup flow needs:
+	Then the one setting site creation needs:
 
 	  - `Atlas Settings.default_bench_snapshot` — the golden image a Site's backing
 	    VM clones from (spec/08-images.md). Wired from `atlas_default_bench_snapshot` if set,
 	    else from the most recent Available `golden-bench*` snapshot if one exists.
-	  - the outbound Email Account — so the verification email actually sends
-	    (`request_site` only queues it; spec/14 calls outbound email an operator
-	    prerequisite). Configured from the `atlas_smtp_*` keys.
 
-	Each step skips with a printed note when its inputs are absent, so this is a
-	safe drop-in for `run_with_proxy` — mirroring how the TLS tail degrades.
+	It skips with a printed note when its input is absent, so this is a safe
+	drop-in for `run_with_proxy` — mirroring how the TLS tail degrades.
 
 	What this does NOT do (deliberately — both are billable host runs): bake the
 	golden bench snapshot, and provision the edge proxy VM. A fresh dev brings the
-	signup flow up in three steps:
+	site-creation flow up in three steps:
 	  1. Bake the golden image once (leaves an Available golden-bench snapshot):
 	       bench --site <site> execute atlas.tests.e2e.use_cases.bench_image.run_smoke
-	  2. Run this (adopts that snapshot, seeds TLS + email):
+	  2. Run this (adopts that snapshot, seeds TLS):
 	       bench --site <site> execute atlas.bootstrap.run_with_self_serve
 	  3. Stand up a proxy VM in the region (so subdomains route + get TLS) — the
 	     proxy_vm use case, or the desk flow in spec/12-proxy.md.
-	Then `/signup` works end to end. A site VM needs ~2 GB RAM, so size the host
+	Then `create_site` works end to end. A site VM needs ~2 GB RAM, so size the host
 	for the number of concurrent sites you expect."""
 	run_with_proxy()
 	ensure_default_bench_snapshot()
-	ensure_outbound_email()
 
 
 def ensure_default_bench_snapshot() -> None:
@@ -964,36 +951,6 @@ def ensure_default_bench_snapshot() -> None:
 	# nosemgrep: frappe-manual-commit -- bootstrap script: persist the adopted default_bench_snapshot setting so self-serve clones find it
 	frappe.db.commit()
 	print(f"[bootstrap] default_bench_snapshot = {snapshot} (adopted newest Available golden-bench)")
-
-
-def ensure_outbound_email() -> None:
-	"""Configure the default outbound Email Account from the `atlas_smtp_*` keys so
-	the signup verification email sends (request_site only queues it). Skips with a
-	note if the keys are absent — like the TLS tail, bootstrap stays runnable on a
-	site with no SMTP yet (the queue entry is then a harmless no-op)."""
-	from atlas import setup
-
-	host = frappe.conf.get("atlas_smtp_host")
-	if not host:
-		print(
-			"[bootstrap] no atlas_smtp_host — skipping outbound email setup. "
-			"Verification emails will queue but not send until an Email Account is configured."
-		)
-		return
-	email = {
-		"host": host,
-		"port": int(frappe.conf.get("atlas_smtp_port", 587)),
-		"login": require_config("atlas_smtp_login"),
-		"password": require_config("atlas_smtp_password"),
-		"from": frappe.conf.get("atlas_smtp_from"),
-	}
-	setup.setup_outbound_email(email)
-	# nosemgrep: frappe-manual-commit -- bootstrap script: persist the outbound Email Account so verification emails can be sent
-	frappe.db.commit()
-	from_address = email["from"] or email["login"]
-	print(
-		f"[bootstrap] outbound Email Account 'Atlas Outbound' configured ({from_address} via {host}:{email['port']})"
-	)
 
 
 def require_config(key: str) -> str:

@@ -1,5 +1,5 @@
 """The explicit setup contract — one typed, scriptable entry point that writes
-every value Atlas needs to bootstrap a provider / TLS / email, with NO reads from
+every value Atlas needs to bootstrap a provider / TLS, with NO reads from
 `frappe.conf`.
 
 Two front-ends feed the same code:
@@ -60,13 +60,6 @@ step, then layers the provisioning on top.
             "account_email": "ops@…",
             "acme_directory_url": "…",  # optional; defaults to LE staging
         },
-        "email": {  # optional — outbound Email Account
-            "host": "smtp.…",
-            "port": 587,
-            "login": "…",
-            "password": "…",
-            "from": "…",
-        },
     }
 
 The Self-Managed networking under `provider.self_managed` is NOT a Single — it is
@@ -81,7 +74,7 @@ from frappe import _
 
 
 def run(config: dict) -> dict:
-	"""Idempotent, explicit. Drive the Layer-1 setters + TLS/email seeding from
+	"""Idempotent, explicit. Drive the Layer-1 setters + TLS seeding from
 	`config` (a plain dict — NEVER `frappe.conf`). Returns a summary dict of what was
 	configured. Calls setters in dependency order; does NOT provision/bake/issue."""
 	provider = config.get("provider") or frappe.throw(_("setup config needs a 'provider' block"))
@@ -130,12 +123,6 @@ def run(config: dict) -> dict:
 		setup_tls_layer(tls)
 		summary["tls_domain"] = tls["domain"]
 
-	# 4. Outbound email (optional).
-	email = config.get("email")
-	if email:
-		setup_outbound_email(email)
-		summary["email"] = email["host"]
-
 	# nosemgrep: frappe-manual-commit -- setup orchestrator: persist the full config so enqueued bootstrap/provision jobs read it cross-transaction.
 	frappe.db.commit()
 	return summary
@@ -167,41 +154,6 @@ def setup_tls_layer(tls: dict) -> None:
 				"is_active": 1,
 			}
 		).insert(ignore_permissions=True)
-
-
-def setup_outbound_email(email: dict) -> None:
-	"""Configure the default outbound Email Account "Atlas Outbound" from an explicit
-	dict (the `atlas_smtp_*` shape). Lifted from bootstrap.ensure_outbound_email; the
-	only change is the input source (a dict, not frappe.conf)."""
-	host = email["host"]
-	login = email["login"]
-	password = email["password"]
-	from_address = email.get("from") or login
-	port = int(email.get("port", 587))
-
-	name = "Atlas Outbound"
-	if frappe.db.exists("Email Account", name):
-		account = frappe.get_doc("Email Account", name)
-	else:
-		account = frappe.new_doc("Email Account")
-		account.email_account_name = name
-	account.update(
-		{
-			"email_id": from_address,
-			"smtp_server": host,
-			"smtp_port": port,
-			# Frappe reads login_id only when login_id_is_different is set; otherwise it
-			# logs in as email_id. Flag it only when the SMTP user differs from From.
-			"login_id_is_different": 1 if login != from_address else 0,
-			"login_id": login,
-			"password": password,
-			"use_tls": 1,
-			"enable_outgoing": 1,
-			"default_outgoing": 1,
-			"awaiting_password": 0,
-		}
-	)
-	account.save(ignore_permissions=True)
 
 
 def self_managed_networking(config: dict) -> dict | None:
@@ -297,16 +249,6 @@ def from_site_config() -> dict:
 			"acme_directory_url": frappe.conf.get("atlas_acme_directory_url", LETS_ENCRYPT_STAGING),
 		}
 
-	host = frappe.conf.get("atlas_smtp_host")
-	if host:
-		config["email"] = {
-			"host": host,
-			"port": int(frappe.conf.get("atlas_smtp_port", 587)),
-			"login": require_config("atlas_smtp_login"),
-			"password": require_config("atlas_smtp_password"),
-			"from": frappe.conf.get("atlas_smtp_from"),
-		}
-
 	return config
 
 
@@ -332,14 +274,6 @@ def get_setup_stages(args: dict) -> list[dict]:
 				"status": _("Configuring TLS"),
 				"fail_msg": _("Failed to configure TLS"),
 				"tasks": [{"fn": _stage_tls, "args": args, "fail_msg": _("TLS setup failed")}],
-			}
-		)
-	if _truthy(args.get("setup_email")):
-		stages.append(
-			{
-				"status": _("Configuring outbound email"),
-				"fail_msg": _("Failed to configure email"),
-				"tasks": [{"fn": _stage_email, "args": args, "fail_msg": _("Email setup failed")}],
 			}
 		)
 	return stages
@@ -385,18 +319,6 @@ def _stage_tls(args: dict) -> None:
 			"aws_region": args.get("route53_region") or "us-east-1",
 			"account_email": args.get("acme_account_email"),
 			"acme_directory_url": args.get("acme_directory_url") or None,
-		}
-	)
-
-
-def _stage_email(args: dict) -> None:
-	setup_outbound_email(
-		{
-			"host": args.get("smtp_host"),
-			"port": int(args.get("smtp_port") or 587),
-			"login": args.get("smtp_login"),
-			"password": args.get("smtp_password"),
-			"from": args.get("smtp_from") or None,
 		}
 	)
 

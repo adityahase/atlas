@@ -263,56 +263,6 @@ function atlas_setup_slides() {
 		},
 
 		{
-			name: "atlas_email",
-			title: __("Email"),
-			icon: "fa fa-envelope",
-			fields: [
-				{
-					fieldname: "setup_email",
-					label: __("Configure outbound email"),
-					fieldtype: "Check",
-					default: 0,
-				},
-				{ fieldtype: "Section Break", depends_on: "eval:doc.setup_email" },
-				{
-					fieldname: "smtp_host",
-					label: __("SMTP Host"),
-					fieldtype: "Data",
-					depends_on: "eval:doc.setup_email",
-					mandatory_depends_on: "eval:doc.setup_email",
-				},
-				{
-					fieldname: "smtp_port",
-					label: __("SMTP Port"),
-					fieldtype: "Int",
-					default: 587,
-					depends_on: "eval:doc.setup_email",
-				},
-				{
-					fieldname: "smtp_login",
-					label: __("SMTP Login"),
-					fieldtype: "Data",
-					depends_on: "eval:doc.setup_email",
-					mandatory_depends_on: "eval:doc.setup_email",
-				},
-				{
-					fieldname: "smtp_password",
-					label: __("SMTP Password"),
-					fieldtype: "Password",
-					depends_on: "eval:doc.setup_email",
-					mandatory_depends_on: "eval:doc.setup_email",
-				},
-				{
-					fieldname: "smtp_from",
-					label: __("From Address (optional)"),
-					fieldtype: "Data",
-					depends_on: "eval:doc.setup_email",
-					description: __("Defaults to the SMTP login."),
-				},
-			],
-		},
-
-		{
 			name: "atlas_golden_snapshot",
 			title: __("Golden Snapshot"),
 			icon: "fa fa-camera",

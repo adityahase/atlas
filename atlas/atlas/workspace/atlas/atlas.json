@@ -220,16 +220,6 @@
   {
    "hidden": 0,
    "is_query_report": 0,
-   "label": "Site Request",
-   "link_count": 0,
-   "link_to": "Site Request",
-   "link_type": "DocType",
-   "onboard": 0,
-   "type": "Link"
-  },
-  {
-   "hidden": 0,
-   "is_query_report": 0,
    "label": "SSH Key",
    "link_count": 0,
    "link_to": "SSH Key",
