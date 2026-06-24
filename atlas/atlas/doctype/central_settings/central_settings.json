@@ -16,7 +16,16 @@
   "registered_on",
   "column_break_registration",
   "last_sync",
-  "last_event_status"
+  "last_event_status",
+  "section_break_tunnel",
+  "tunnel_ip",
+  "tunnel_cidr",
+  "hub_public_key",
+  "hub_endpoint",
+  "column_break_tunnel",
+  "wg_public_key",
+  "wg_listen_port",
+  "tunnel_status"
  ],
  "fields": [
   {
@@ -99,6 +108,68 @@
    "fieldname": "last_event_status",
    "fieldtype": "Small Text",
    "label": "Last Event Status",
+   "read_only": 1
+  },
+  {
+   "description": "The Central-managed WireGuard tunnel. Every field here is set by Central via provision_tunnel during registration — not hand-entered.",
+   "fieldname": "section_break_tunnel",
+   "fieldtype": "Section Break",
+   "label": "Tunnel"
+  },
+  {
+   "description": "This Atlas's /32 on wg0, e.g. 10.88.0.2.",
+   "fieldname": "tunnel_ip",
+   "fieldtype": "Data",
+   "label": "Tunnel IP",
+   "read_only": 1
+  },
+  {
+   "description": "The tunnel CIDR (the hub peer's allowed-ips), e.g. 10.88.0.0/16.",
+   "fieldname": "tunnel_cidr",
+   "fieldtype": "Data",
+   "label": "Tunnel CIDR",
+   "read_only": 1
+  },
+  {
+   "description": "The Central hub's WireGuard public key (the one peer).",
+   "fieldname": "hub_public_key",
+   "fieldtype": "Data",
+   "label": "Hub Public Key",
+   "read_only": 1
+  },
+  {
+   "description": "The hub's public ip:port the spoke dials, e.g. 203.0.113.1:51820.",
+   "fieldname": "hub_endpoint",
+   "fieldtype": "Data",
+   "label": "Hub Endpoint",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_tunnel",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "This Atlas's own WireGuard public key, returned to Central so the hub can peer (read-back).",
+   "fieldname": "wg_public_key",
+   "fieldtype": "Data",
+   "label": "WireGuard Public Key",
+   "read_only": 1
+  },
+  {
+   "default": "51820",
+   "description": "This Atlas's wg UDP listen port — the one port its public firewall accepts.",
+   "fieldname": "wg_listen_port",
+   "fieldtype": "Int",
+   "label": "WireGuard Listen Port",
+   "read_only": 1
+  },
+  {
+   "default": "Inactive",
+   "description": "Inactive → Provisioning (tunnel up, firewall armed) → Active (confirmed over the tunnel). Reverting when the auto-revert fired.",
+   "fieldname": "tunnel_status",
+   "fieldtype": "Select",
+   "label": "Tunnel Status",
+   "options": "Inactive\nProvisioning\nActive\nReverting",
    "read_only": 1
   }
  ],

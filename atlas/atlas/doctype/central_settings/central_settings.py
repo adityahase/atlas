@@ -23,11 +23,18 @@ class CentralSettings(Document):
 		api_secret: DF.Password
 		atlas_id: DF.Data | None
 		enabled: DF.Check
+		hub_endpoint: DF.Data | None
+		hub_public_key: DF.Data | None
 		last_event_status: DF.SmallText | None
 		last_sync: DF.Datetime | None
 		region: DF.Data | None
 		registered_on: DF.Datetime | None
+		tunnel_cidr: DF.Data | None
+		tunnel_ip: DF.Data | None
+		tunnel_status: DF.Literal["Inactive", "Provisioning", "Active", "Reverting"]
 		url: DF.Data
+		wg_listen_port: DF.Int
+		wg_public_key: DF.Data | None
 	# end: auto-generated types
 
 	@frappe.whitelist()
