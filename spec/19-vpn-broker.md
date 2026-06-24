@@ -45,10 +45,10 @@ network namespace.** Atlas owns it end to end; the guest is never touched and
 holds no tunnel state.
 
 - **Outer endpoint:** `<server-public-v4>:<port>`. The interface listens on a
-  per-tunnel UDP port on the host's public IPv4. There is no host input firewall
-  (the `inet atlas` table is `forward` + `nat` only — see
-  [06-networking.md](./06-networking.md)), so the port is reachable with no extra
-  INPUT rule.
+  per-tunnel UDP port on the host's public IPv4. The `inet atlas` input chain is
+  `policy accept` and drops only *decrypted* tunnel ingress (see the Isolation
+  section); the outer UDP packet arrives on the physical uplink, not a `wg-…`
+  interface, so the port is reachable with no extra INPUT rule.
 - **Inner reach:** the VM's `/128`. The host root netns already holds a
   `<vm-v6>/128 via <host-veth>` route into the VM's namespace
   (`vm-network-up.py`), so a packet the interface decrypts with destination
@@ -87,17 +87,18 @@ Three independent layers, defense in depth:
 
 1. **The client's `AllowedIPs` is `<vm-v6>/128`.** A well-behaved client routes
    only the VM through the tunnel.
-2. **The host nft rule pins the interface to the VM.** Because the interface is
-   1:1 with the tunnel, its name uniquely identifies it, so two rules in the
-   existing `inet atlas forward` chain are exact:
+2. **Host nft rules pin the interface to the VM.** Because the interface is 1:1
+   with the tunnel, its name uniquely identifies it. *Transit* — a decrypted
+   packet the host would route onward — is governed by two exact rules in the
+   existing `inet atlas forward` chain:
    - `iifname "wg-<id>" ip6 daddr <vm-v6> accept`
    - `iifname "wg-<id>" drop`
 
    Cryptokey routing only governs what the host *sends back* to a peer; it does
    **not** restrict the *destination* of a decrypted inbound packet. So without
    this rule a client could set `dst=<other-vm-v6>` and the host would route it.
-   The `drop` closes that: anything from this interface that is not destined to
-   this VM — another VM, the host, the internet — is dropped.
+   The `drop` closes that: anything forwarded off this interface bound for another
+   VM or the internet is dropped.
 
    **These two rules are `insert`ed at the *head* of the forward chain, not
    appended.** `vm-network-up.py` lays down a broad per-VM accept for *every* VM
@@ -110,6 +111,20 @@ Three independent layers, defense in depth:
    ([20-firewall.md](./20-firewall.md)), which lives in a *separate*
    higher-priority chain and is itself scoped to the public uplink, so it never
    touches tunnel ingress.
+
+   The forward hook only sees *transit*. A packet a client addresses to the
+   **host itself** — the overlay `/127`'s host end (which the client shares), or
+   any host address with a service bound to `::` (sshd, the Frappe stack) — is
+   delivered **locally** on the `input` path, which `forward` never sees. So the
+   `drop` above does not cover the host; a third, symmetric rule in a dedicated
+   `inet atlas input` chain (`policy accept`, so ordinary host ingress — including
+   the tunnel's own *outer* UDP listener, which lands on the physical uplink, not
+   `wg-…` — is untouched) closes it:
+   - `iifname "wg-<id>" drop`
+
+   Nothing legitimately terminates on the host over the tunnel (the host overlay
+   end exists only to route the VM's return traffic), so a blanket input drop is
+   safe; it is appended, since the input chain holds only these per-tunnel drops.
 3. **The network namespace.** Even granting a hostile inner packet, the host
    routes only `<vm-v6>/128` into a netns that contains exactly one VM; there is
    no path from one VM's netns to another.
@@ -288,8 +303,8 @@ inner/isolation model.
   **Revoke**. The form links off the Virtual Machine dashboard ("Network access")
   and the Atlas workspace. **The real-droplet e2e** still lands in a follow-up: a
   `vpn_tunnel` use case that, on a live droplet, completes a handshake, reaches the
-  owned VM, **proves it cannot reach a second VM** (the isolation host fact), then
-  revokes.
+  owned VM, **proves it can reach neither a second VM nor the host itself** (the
+  isolation host facts — the forward and input drops), then revokes.
 - **No multi-VM / mesh tunnel.** One tunnel reaches one VM (the no-overlay
   non-goal).
 - **No v4 *into* the VM over the tunnel.** Inner reach is the VM's v6 `/128`; a

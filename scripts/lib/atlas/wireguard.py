@@ -8,9 +8,12 @@ the VM needs no new routing. A point-to-point `/127` overlay on the interface
 gives the host and client ends private v6 addresses, and its connected route is
 the VM's return path to the client.
 
-**Isolation** — the one thing that makes "only your VM" true — is two rules in
-the existing `inet atlas forward` chain, keyed on the interface name (which is
-1:1 with the tunnel):
+**Isolation** — the one thing that makes "only your VM" true — is interface-keyed
+nft rules (the interface name is 1:1 with the tunnel), split across two hooks
+because the kernel routes *transit* and *host-local* traffic on different paths.
+
+*Transit* — a decrypted packet the host would route onward — is the `forward`
+chain. Two rules in the existing `inet atlas forward`:
 
     iifname <iface> ip6 daddr <vm-v6> accept
     iifname <iface> drop
@@ -18,15 +21,28 @@ the existing `inet atlas forward` chain, keyed on the interface name (which is
 WireGuard's cryptokey routing only governs what the host sends *back* to a peer;
 it does not restrict the *destination* of a decrypted inbound packet, so without
 the `drop` a client could address another VM and the host would route it. The
-`drop` closes that — anything from this interface that is not this VM is dropped.
+`drop` closes that — anything from this interface bound for another VM or the
+internet is dropped. These two rules must sit at the **head** of the forward
+chain, above the broad per-VM forward-accept rules vm-network-up.py lays down
+(`ip6 daddr <vm> oifname <veth> accept`). Those rules do not constrain the input
+interface, so an appended tunnel `drop` is shadowed: a packet from this tunnel to
+*another* VM matches that VM's accept first (accept is terminal) and is forwarded
+— the exact leak the drop exists to stop. So we `insert` the pair (drop first,
+then accept, leaving [accept, drop, …per-VM…]) instead of appending it.
 
-These two rules must sit at the **head** of the forward chain, above the broad
-per-VM forward-accept rules vm-network-up.py lays down (`ip6 daddr <vm> oifname
-<veth> accept`). Those rules do not constrain the input interface, so an appended
-tunnel `drop` is shadowed: a packet from this tunnel to *another* VM matches that
-VM's accept first (accept is terminal) and is forwarded — the exact leak the drop
-exists to stop. So we `insert` the pair (drop first, then accept, leaving
-[accept, drop, …per-VM…]) instead of appending it.
+*Host-local* — a packet a client addresses to the **host itself** — never reaches
+the forward hook: local delivery is the `input` path. So the forward `drop` does
+NOT cover the host, and a client could craft `dst=<overlay host end>` (it shares
+the /127) or any host address with a service bound to `::` (sshd, the Frappe
+stack) and reach it. A third, symmetric rule in a dedicated `inet atlas input`
+chain (`policy accept`, so non-tunnel host ingress — including the tunnel's OWN
+outer UDP listener, which lands on the physical uplink, not `wg-…` — is untouched)
+closes that:
+
+    iifname <iface> drop
+
+Nothing legitimately terminates on the host over the tunnel (the host overlay end
+exists only to route the VM's return traffic), so a blanket input drop is safe.
 
 Everything here is pure string/argv construction except `apply_tunnel` /
 `remove_tunnel` / `apply_persisted_tunnels`, which touch the host. The rule and
@@ -44,6 +60,7 @@ from atlas.network_env import NetworkEnv
 
 TABLE = ("inet", "atlas")
 FORWARD = "forward"
+INPUT = "input"
 
 
 @dataclass(frozen=True)
@@ -139,18 +156,31 @@ def accept_rule_argv(interface: str, virtual_machine_ipv6: str) -> list[str]:
 
 
 def drop_rule_argv(interface: str) -> list[str]:
-	"""forward: drop anything else arriving on this tunnel's interface — another
-	VM, the host, the internet. This is the isolation guarantee; without it a
-	client could address a VM that is not its own and the host would route it.
-	Inserted at the head (above the per-VM accepts that would otherwise shadow it)."""
+	"""forward: drop anything else *forwarded* off this tunnel's interface — another
+	VM, the internet. This is the transit isolation guarantee; without it a client
+	could address a VM that is not its own and the host would route it. Inserted at
+	the head (above the per-VM accepts that would otherwise shadow it). The host
+	*itself* is a different path — see host_drop_rule_argv."""
 	return ["insert", "rule", "inet", "atlas", FORWARD, "iifname", interface, "drop"]
+
+
+def host_drop_rule_argv(interface: str) -> list[str]:
+	"""input: drop a decrypted packet this tunnel addresses to the HOST itself. The
+	forward chain only sees *transit*; a packet bound for a host-local service — the
+	overlay /127's host end (which the client shares), or any host address bound to
+	`::` (sshd, the Frappe stack) — is delivered locally on the input path, which
+	forward never sees, so without this a client could reach the host over the tunnel.
+	Appended, not inserted: the input chain holds only these per-tunnel drops, so
+	nothing shadows it."""
+	return ["add", "rule", "inet", "atlas", INPUT, "iifname", interface, "drop"]
 
 
 def apply_tunnel(config: TunnelConfig) -> None:
 	"""Idempotently bring the tunnel up: create the interface, set its key/port and
-	the one peer, assign the host overlay address, raise it, and install the two
-	isolation rules. Re-running (cold boot, reconcile, double apply) is a no-op —
-	the same self-healing contract as vm-network-up.py / reserved_ip_nat."""
+	the one peer, assign the host overlay address, raise it, and install the isolation
+	rules (the forward accept/drop pair plus the input host-drop). Re-running (cold
+	boot, reconcile, double apply) is a no-op — the same self-healing contract as
+	vm-network-up.py / reserved_ip_nat."""
 	if not run_ok("sudo", "ip", "link", "show", config.interface):
 		run("sudo", *link_add_argv(config.interface))
 	run("sudo", *wg_set_interface_argv(config.interface, config.listen_port, config.private_key_path))
@@ -177,16 +207,32 @@ def apply_tunnel(config: TunnelConfig) -> None:
 	if not _has_accept(forward, config.interface, config.virtual_machine_ipv6):
 		run("sudo", "nft", *accept_rule_argv(config.interface, config.virtual_machine_ipv6))
 
+	# Host-local isolation: the forward rules above govern only transit. A packet
+	# this tunnel addresses to the host itself is delivered locally on the input
+	# path, which forward never sees. A dedicated input chain (policy accept, so
+	# ordinary host ingress is untouched; created defensively like forward above)
+	# carries one drop for this interface — see host_drop_rule_argv.
+	if not run_ok("sudo", "nft", "list", "chain", *TABLE, INPUT):
+		run(
+			"sudo",
+			"nft",
+			"add chain inet atlas input { type filter hook input priority filter; policy accept; }",
+		)
+	host_input = run("sudo", "nft", "list", "chain", *TABLE, INPUT)
+	if not _has_drop(host_input, config.interface):
+		run("sudo", "nft", *host_drop_rule_argv(config.interface))
+
 
 def remove_tunnel(interface: str) -> None:
-	"""Tear the tunnel down, best-effort and idempotent: delete the two forward
-	rules by handle (keyed on the interface name), then delete the interface (which
-	takes its addresses and connected route with it). A missing rule or interface is
-	not an error — a revoke may run after the VM is already gone, symmetric with
-	vm-network-down.py."""
-	listing = run("sudo", "nft", "-a", "list", "chain", *TABLE, FORWARD, check=False)
-	for handle in _handles_for(listing, interface):
-		run("sudo", "nft", "delete", "rule", "inet", "atlas", FORWARD, "handle", handle, check=False)
+	"""Tear the tunnel down, best-effort and idempotent: delete this interface's rules
+	by handle in BOTH the forward chain (transit) and the input chain (host-local),
+	then delete the interface (which takes its addresses and connected route with it).
+	A missing rule, chain, or interface is not an error — a revoke may run after the VM
+	is already gone, symmetric with vm-network-down.py."""
+	for chain in (FORWARD, INPUT):
+		listing = run("sudo", "nft", "-a", "list", "chain", *TABLE, chain, check=False)
+		for handle in _handles_for(listing, interface):
+			run("sudo", "nft", "delete", "rule", "inet", "atlas", chain, "handle", handle, check=False)
 	run("sudo", *link_del_argv(interface), check=False)
 
 

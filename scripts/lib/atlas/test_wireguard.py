@@ -79,11 +79,20 @@ class TestCommandArgv(unittest.TestCase):
 		)
 
 	def test_drop_rule_is_unconditional_for_the_interface(self):
-		# The isolation guarantee: anything else on this interface is dropped. Inserted
-		# at the head so a per-VM accept for another VM cannot pre-empt it.
+		# The transit isolation guarantee: anything else forwarded off this interface is
+		# dropped. Inserted at the head so a per-VM accept for another VM cannot pre-empt it.
 		self.assertEqual(
 			wg.drop_rule_argv(INTERFACE),
 			["insert", "rule", "inet", "atlas", "forward", "iifname", INTERFACE, "drop"],
+		)
+
+	def test_host_drop_rule_targets_the_input_chain(self):
+		# The host-local guarantee: a packet this tunnel addresses to the host itself
+		# takes the input path, which the forward drop never sees. Appended (`add`) to the
+		# dedicated input chain, which holds only per-tunnel drops, so nothing shadows it.
+		self.assertEqual(
+			wg.host_drop_rule_argv(INTERFACE),
+			["add", "rule", "inet", "atlas", "input", "iifname", INTERFACE, "drop"],
 		)
 
 
@@ -92,6 +101,11 @@ _LISTING = f"""chain forward {{
 \tiifname "{INTERFACE}" ip6 daddr {VM_V6} accept # handle 12
 \tiifname "{INTERFACE}" drop # handle 13
 \tiifname "atlas-hdeadbee" ip6 daddr 2001:db8::3 accept # handle 9
+}}"""
+
+_INPUT_LISTING = f"""chain input {{
+\ttype filter hook input priority filter; policy accept;
+\tiifname "{INTERFACE}" drop # handle 7
 }}"""
 
 
@@ -108,6 +122,11 @@ class TestRulePresenceAndHandles(unittest.TestCase):
 		# 12 and 13 are this tunnel's rules; 9 belongs to another VM's veth rule.
 		self.assertEqual(list(wg._handles_for(_LISTING, INTERFACE)), ["12", "13"])
 		self.assertEqual(list(wg._handles_for(_LISTING, "atlas-hdeadbee")), ["9"])
+
+	def test_input_drop_detected_and_handle_scraped(self):
+		# remove_tunnel scans the input chain too; apply skips re-adding a present drop.
+		self.assertTrue(wg._has_drop(_INPUT_LISTING, INTERFACE))
+		self.assertEqual(list(wg._handles_for(_INPUT_LISTING, INTERFACE)), ["7"])
 
 
 class TestTunnelConfigSidecar(unittest.TestCase):
