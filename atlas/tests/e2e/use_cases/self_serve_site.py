@@ -297,7 +297,7 @@ def _assert_bench_self_routing(
 	_stdout, stderr, code = guest(f"atlas-route register {stray}")
 	assert code == 0, f"register for the stray case failed: {stderr[-500:]}"
 	assert frappe.db.exists("Subdomain", stray), "register did not reserve the stray label"
-	stdout, stderr, code = guest("atlas-route list")
+	_stdout, stderr, code = guest("atlas-route list")
 	assert code == 0, f"guest atlas-route list failed: {stderr[-500:]}"
 	assert not frappe.db.exists("Subdomain", stray), (
 		f"list did not clear the stray {stray} (stderr: {stderr[-500:]})"
