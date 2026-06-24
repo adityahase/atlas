@@ -155,6 +155,9 @@ class BootstrapInputs(TaskInputs):
 	firecracker_version: str  # e.g. v1.15.1
 	sshpiper_version: str  # e.g. v1.15.1
 	architecture: str  # e.g. x86_64 (must match `uname -m`)
+	atlas_url: str
+	sshpiper_lookup_server: str
+	sshpiper_api_key: str
 
 
 @dataclass(frozen=True)
