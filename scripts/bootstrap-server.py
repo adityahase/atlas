@@ -309,6 +309,12 @@ def main() -> None:
 
 	# 3B Install SSHPiper + Plugin (version-gated).
 	_install_sshpiper(inputs.sshpiper_version, inputs.architecture)
+	sshpiper_envvars = f"""
+	ATLAS_URL="{inputs.atlas_url}"
+	SSHPIPER_LOOKUP_SERVER="{inputs.sshpiper_lookup_server}"
+	SSHPIPER_API_KEY="{inputs.sshpiper_api_key}"
+	"""
+	install_file(sshpiper_envvars, "/etc/default/sshpiper", mode="0644")
 	run("sudo", "systemctl", "enable", "sshpiper.service", check=False, quiet=True)
 
 	# 4. Kernel/network sysctls: VM-networking essentials + CIS 3.3 hardening.

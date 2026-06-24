@@ -326,7 +326,14 @@ def lookup_virtual_machine_ssh(server: str, vm_name: str, api_key: str | None = 
 	if not expected or not hmac.compare_digest(str(api_key), str(expected)):
 		frappe.throw("Not permitted", frappe.PermissionError)
 
-	vm = frappe.get_doc("Virtual Machine", vm_name)
+	vm = frappe.db.get_value(
+		"Virtual Machine",
+		{"server": server, "title": vm_name},
+		["name", "title", "server", "ipv6_address", "ssh_public_key"],
+		as_dict=True,
+	)
+	if not vm:
+		frappe.throw("Not permitted", frappe.PermissionError)
 	if vm.server != server:
 		frappe.throw("Not permitted", frappe.PermissionError)
 	if not vm.ipv6_address:
@@ -334,6 +341,7 @@ def lookup_virtual_machine_ssh(server: str, vm_name: str, api_key: str | None = 
 
 	return {
 		"virtual_machine": vm.name,
+		"title": vm.title,
 		"server": server,
 		"ipv6_address": vm.ipv6_address,
 		"host": vm.ipv6_address,
