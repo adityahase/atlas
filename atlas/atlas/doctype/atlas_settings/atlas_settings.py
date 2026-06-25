@@ -167,6 +167,50 @@ class AtlasSettings(Document):
 		return provisioning.provision_server(self.provider_type, title, dialog_fields)
 
 	@frappe.whitelist()
+	def bake_golden_image(self, force: bool = False) -> str:
+		"""Bake Golden Image button — the desk equivalent of bootstrap's
+		`bake_golden_image` step. Resolves the newest Active Server (the same target
+		`run_self_serve` bakes on), then enqueues the bake as a `long` background job:
+		building bench in a guest then snapshotting takes minutes, so it can't run in
+		the web worker. Wires `Atlas Settings.default_bench_snapshot` when done.
+
+		Returns the Server name the bake was enqueued against. `force=True` re-bakes
+		even if an Available golden snapshot is already configured."""
+		frappe.only_for("System Manager")
+		server_name = _newest_active_server()
+		frappe.enqueue(
+			"atlas.bootstrap.bake_golden_image",
+			queue="long",
+			timeout=3600,
+			server_name=server_name,
+			force=frappe.parse_json(force) if isinstance(force, str) else force,
+		)
+		return server_name
+
+	@frappe.whitelist()
+	def ensure_proxy(self) -> str:
+		"""Ensure Proxy button — the desk equivalent of bootstrap's `ensure_proxy`
+		step. Reads the region + wildcard domain off the active Root Domain (the same
+		source `run_self_serve` reads via the TLS config), resolves the newest Active
+		Server, then enqueues the proxy stand-up (provision VM → build nginx+Lua stack
+		→ attach a reserved IPv4) as a `long` job. Idempotent server-side: a Running
+		proxy VM in the region is reused rather than provisioning a second.
+
+		Returns the Server name the proxy was enqueued against."""
+		frappe.only_for("System Manager")
+		server_name = _newest_active_server()
+		region, domain = _proxy_region_and_domain()
+		frappe.enqueue(
+			"atlas.bootstrap.ensure_proxy",
+			queue="long",
+			timeout=1800,
+			server_name=server_name,
+			region=region,
+			domain=domain,
+		)
+		return server_name
+
+	@frappe.whitelist()
 	def discover_servers(self) -> list[dict]:
 		"""Discover Servers button. List the active vendor's servers (unfiltered) and
 		flag which Atlas already models by provider_resource_id. Read-only — inserts
@@ -180,3 +224,29 @@ class AtlasSettings(Document):
 		`resource_ids` as a JSON string, so parse it before use."""
 		resource_ids = frappe.parse_json(resource_ids)
 		return provisioning.import_servers(self.provider_type, resource_ids)
+
+
+def _newest_active_server() -> str:
+	"""The newest Active Server — the target the bake / proxy desk buttons act on,
+	mirroring bootstrap's `_existing_active_server` (`run_self_serve` bakes + proxies
+	on the server it stood up). Throws if none exists so the operator sees a clear
+	"provision a Server first" instead of an enqueued job that fails later."""
+	rows = frappe.get_all(
+		"Server", filters={"status": "Active"}, pluck="name", order_by="creation desc", limit=1
+	)
+	if not rows:
+		frappe.throw(_("No Active Server. Provision one first, then bake / stand up the proxy."))
+	return rows[0]
+
+
+def _proxy_region_and_domain() -> tuple[str, str]:
+	"""The region + wildcard domain the proxy fronts, read off the active Root Domain
+	(bootstrap reads the same pair from its TLS config). Throws if no Root Domain
+	exists — the proxy serves a region's wildcard, so the TLS layer must be seeded
+	first (create a Root Domain, the desk equivalent of `ensure_tls_layer`)."""
+	rows = frappe.get_all("Root Domain", fields=["domain", "region"], order_by="creation desc", limit=1)
+	if not rows:
+		frappe.throw(
+			_("No Root Domain. Create one (the region's wildcard zone) before standing up its proxy.")
+		)
+	return rows[0].region, rows[0].domain
