@@ -363,6 +363,12 @@ immediately, even before the worker has picked it up. If the worker never
 runs (queue down), the row sits in `Pending` forever — visible enough that
 the operator notices.
 
+For the long Tasks (image sync, the in-guest bench/proxy bakes), the Task row
+is also the **live progress carrier**: its output is streamed onto the row while
+the script runs, not written once on exit, and a `Running Operations` view
+collects every in-flight Task fleet-wide. See
+[22-observability.md](./22-observability.md).
+
 For sync Tasks (Provision/Start/Stop/Terminate, Run Task dialog) the
 button handler calls `run_task` directly; row insert and run happen back
 to back in one process.
