@@ -116,11 +116,16 @@ class VirtualMachine(Document):
 
 	def after_insert(self) -> None:
 		"""Auto-provision: enqueue the provision job so the operator never
-		has to click `Provision` on a freshly-created Pending VM."""
+		has to click `Provision` on a freshly-created Pending VM.
+
+		enqueue_after_commit so the worker only starts once this insert's
+		transaction has committed — otherwise auto_provision can look up the VM
+		before the row exists ("Virtual Machine ... not found")."""
 		frappe.enqueue(
 			"atlas.atlas.doctype.virtual_machine.virtual_machine.auto_provision",
 			queue="long",
 			timeout=300,
+			enqueue_after_commit=True,
 			virtual_machine_name=self.name,
 		)
 

@@ -93,11 +93,16 @@ class ImageBuild(Document):
 
 	def after_insert(self) -> None:
 		"""Enqueue the bake. queue=long because it SSHes and waits on a multi-minute
-		in-guest build; mirrors Site.after_insert / VirtualMachine.after_insert."""
+		in-guest build; mirrors Site.after_insert / VirtualMachine.after_insert.
+
+		enqueue_after_commit so the worker only starts once this insert's
+		transaction has committed — otherwise the job can dequeue and look up
+		`run(image_build_name)` before the row exists ("Image Build ... not found")."""
 		frappe.enqueue(
 			"atlas.atlas.doctype.image_build.image_build.run",
 			queue="long",
 			timeout=3600,
+			enqueue_after_commit=True,
 			image_build_name=self.name,
 		)
 

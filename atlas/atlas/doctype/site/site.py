@@ -116,11 +116,16 @@ class Site(Document):
 	def after_insert(self) -> None:
 		"""Auto-provision: enqueue the provision→deploy job so the user never has
 		to click anything after create_site. queue=long because it SSHes (clone-boot-
-		deploy-probe). Mirrors VirtualMachine.after_insert."""
+		deploy-probe). Mirrors VirtualMachine.after_insert.
+
+		enqueue_after_commit so the worker only starts once this insert's
+		transaction has committed — otherwise auto_provision can look up the Site
+		before the row exists ("Site ... not found")."""
 		frappe.enqueue(
 			"atlas.atlas.doctype.site.site.auto_provision",
 			queue="long",
 			timeout=1800,
+			enqueue_after_commit=True,
 			site_name=self.name,
 		)
 
