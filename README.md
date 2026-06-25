@@ -18,6 +18,13 @@ bench get-app $URL_OF_THIS_REPO --branch main
 bench install-app atlas
 ```
 
+## Bootstrap
+
+Stand up Atlas on a fresh site — configure settings, provision a server, sync
+the base image, and (optionally) bake a golden image, stand up the proxy, and
+issue a wildcard cert — in one command. See
+[BOOTSTRAP.md](./BOOTSTRAP.md) for the necessary steps and recommended sizing.
+
 ## Verify locally
 
 The e2e harness reads its inputs from one JSON fixture, not site config —
