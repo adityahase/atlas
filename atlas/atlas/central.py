@@ -42,7 +42,11 @@ _ROUTES = {
 
 
 class CentralError(Exception):
-	pass
+	# status_code is the HTTP status when Central answered with one (>=400);
+	# None for a network-level failure where no response arrived.
+	def __init__(self, message: str, status_code: int | None = None) -> None:
+		super().__init__(message)
+		self.status_code = status_code
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -133,7 +137,9 @@ class CentralClient:
 		except requests.RequestException as exception:
 			raise CentralError(f"{method} {route_key}: {exception}") from exception
 		if response.status_code >= 400:
-			raise CentralError(f"{method} {route_key} -> {response.status_code}: {response.text}")
+			raise CentralError(
+				f"{method} {route_key} -> {response.status_code}: {response.text}", response.status_code
+			)
 		if not response.content:
 			return {}
 		body = response.json()

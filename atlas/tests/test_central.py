@@ -11,6 +11,7 @@ No live Central call — requests is monkeypatched.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -139,7 +140,22 @@ class TestCentralUpsert(IntegrationTestCase):
 		self.assertFalse(frappe.db.get_value("Central Image", "bench-v15", "local_image"))
 
 
+@contextlib.contextmanager
+def _patched_emit():
+	"""Patch out _emit's side effects so a handler test stays unit-pure: enabled,
+	the MyISAM log-row insert (stubbed to return name cel-1), and enqueue. Yields
+	the enqueue mock — the assertion surface for the tests."""
+	with (
+		patch.object(central_report, "_enabled", return_value=True),
+		patch.object(central_report, "_write_log", return_value="cel-1"),
+		patch.object(central_report.frappe, "enqueue") as enqueue,
+	):
+		yield enqueue
+
+
 class TestCentralReport(IntegrationTestCase):
+	_patched_emit = staticmethod(_patched_emit)
+
 	def _vm(self, status="Running", before_status="Pending"):
 		doc = SimpleNamespace(
 			name="vm-1", title="vm-1", status=status, server="srv-1", doctype="Virtual Machine", tenant=None
@@ -159,10 +175,7 @@ class TestCentralReport(IntegrationTestCase):
 		enqueue.assert_not_called()
 
 	def test_status_change_enqueues_after_commit(self) -> None:
-		with (
-			patch.object(central_report, "_enabled", return_value=True),
-			patch.object(central_report.frappe, "enqueue") as enqueue,
-		):
+		with self._patched_emit() as enqueue:
 			central_report.on_vm_update(self._vm(status="Running", before_status="Pending"))
 		enqueue.assert_called_once()
 		args, kwargs = enqueue.call_args
@@ -171,6 +184,26 @@ class TestCentralReport(IntegrationTestCase):
 		self.assertEqual(kwargs["event_type"], "vm.status_changed")
 		self.assertEqual(kwargs["payload"]["name"], "vm-1")
 		self.assertEqual(kwargs["payload"]["status"], "Running")
+		# The deliver job is handed the audit row to stamp.
+		self.assertEqual(kwargs["log_name"], "cel-1")
+
+	def test_write_log_row_snapshots_reference_and_starts_pending(self) -> None:
+		"""_write_log builds the audit row snapshotting the source doctype/name (as
+		Data, not a Link, so it survives the source's deletion) and starts it at
+		pending — independent of delivery. Patches only the single get_doc call it
+		makes, so no Frappe internals are affected."""
+		with patch.object(central_report.frappe, "get_doc") as get_doc:
+			get_doc.return_value.insert.return_value.name = "cel-1"
+			name = central_report._write_log("vm.status_changed", {"name": "vm-1"}, self._vm())
+		self.assertEqual(name, "cel-1")
+		row = get_doc.call_args[0][0]
+		self.assertEqual(row["doctype"], "Central Event Log")
+		self.assertEqual(row["event_type"], "vm.status_changed")
+		self.assertEqual(row["status"], "pending")
+		self.assertEqual(row["attempts"], 0)
+		self.assertEqual(row["reference_doctype"], "Virtual Machine")
+		self.assertEqual(row["reference_name"], "vm-1")
+		self.assertEqual(json.loads(row["payload"]), {"name": "vm-1"})
 
 	def test_no_status_change_skips(self) -> None:
 		with (
@@ -181,10 +214,7 @@ class TestCentralReport(IntegrationTestCase):
 		enqueue.assert_not_called()
 
 	def test_after_insert_emits_created(self) -> None:
-		with (
-			patch.object(central_report, "_enabled", return_value=True),
-			patch.object(central_report.frappe, "enqueue") as enqueue,
-		):
+		with self._patched_emit() as enqueue:
 			central_report.on_vm_after_insert(self._vm(before_status=None))
 		self.assertEqual(enqueue.call_args.kwargs["event_type"], "vm.created")
 
@@ -192,16 +222,64 @@ class TestCentralReport(IntegrationTestCase):
 		settings = MagicMock()
 		settings.enabled = 1
 		settings.api_key = "svc_key"
-		settings.client.return_value.post_event.side_effect = CentralError("central down")
+		settings.client.return_value.post_event.side_effect = CentralError("central down", 503)
 		with (
 			patch.object(central_report.frappe, "get_single", return_value=settings),
+			patch.object(central_report, "_stamp") as stamp,
 			patch.object(central_report.frappe, "log_error"),
 		):
-			central_report.deliver("vm.created", {"name": "vm-1"})
+			central_report.deliver("cel-1", "vm.created", {"name": "vm-1"})
+		# The single's breadcrumb still records the error...
 		settings.db_set.assert_called()
 		recorded = settings.db_set.call_args[0]
 		self.assertEqual(recorded[0], "status")
 		self.assertIn("error", recorded[1])
+		# ...and the audit row is stamped error with the HTTP status from Central.
+		stamp.assert_called_once()
+		self.assertEqual(stamp.call_args[0][0], "cel-1")
+		self.assertEqual(stamp.call_args.kwargs["status"], "error")
+		self.assertEqual(stamp.call_args.kwargs["http_status"], 503)
+
+	def test_deliver_stamps_ok_on_success(self) -> None:
+		settings = MagicMock()
+		settings.enabled = 1
+		settings.api_key = "svc_key"
+		with (
+			patch.object(central_report.frappe, "get_single", return_value=settings),
+			patch.object(central_report, "_stamp") as stamp,
+		):
+			central_report.deliver("cel-1", "vm.created", {"name": "vm-1"})
+		settings.client.return_value.post_event.assert_called_once()
+		stamp.assert_called_once_with("cel-1", status="ok", http_status=200)
+
+	def test_deliver_skips_when_unregistered(self) -> None:
+		settings = MagicMock()
+		settings.enabled = 1
+		settings.api_key = None  # enabled but no service-user creds yet
+		with (
+			patch.object(central_report.frappe, "get_single", return_value=settings),
+			patch.object(central_report, "_stamp") as stamp,
+		):
+			central_report.deliver("cel-1", "vm.created", {"name": "vm-1"})
+		settings.client.assert_not_called()
+		stamp.assert_called_once_with("cel-1", status="skipped")
+
+	def test_log_row_survives_rollback(self) -> None:
+		"""The load-bearing claim: a Central Event Log row written by _write_log
+		survives a rollback of the surrounding transaction, because the table is
+		MyISAM (non-transactional). This is the whole reason the doctype exists and
+		it can only be asserted against the real table, so it lives here."""
+		name = central_report._write_log("vm.status_changed", {"name": "vm-rb"}, self._vm())
+		# Roll back the request transaction, as a failed VM save would.
+		frappe.db.rollback()
+		# An InnoDB row would be gone now; the MyISAM audit row is still here.
+		self.assertTrue(frappe.db.exists("Central Event Log", name))
+		row = frappe.get_doc("Central Event Log", name)
+		self.assertEqual(row.status, "pending")
+		self.assertEqual(row.event_type, "vm.status_changed")
+		self.assertEqual(row.reference_name, "vm-1")
+		row.delete()
+		frappe.db.commit()
 
 
 class TestCentralReportSite(IntegrationTestCase):
@@ -210,7 +288,12 @@ class TestCentralReportSite(IntegrationTestCase):
 
 	def _site(self, status="Pending", before_status=None, tenant=None):
 		doc = SimpleNamespace(
-			name="acme.blr1.frappe.dev", status=status, subdomain="acme", region="blr1", tenant=tenant
+			name="acme.blr1.frappe.dev",
+			status=status,
+			subdomain="acme",
+			region="blr1",
+			tenant=tenant,
+			doctype="Site",
 		)
 		doc.get = lambda key, default=None: getattr(doc, key, default)
 		doc.get_password = lambda field: "atlas-baked"
@@ -220,10 +303,7 @@ class TestCentralReportSite(IntegrationTestCase):
 		return doc
 
 	def test_after_insert_emits_created(self) -> None:
-		with (
-			patch.object(central_report, "_enabled", return_value=True),
-			patch.object(central_report.frappe, "enqueue") as enqueue,
-		):
+		with _patched_emit() as enqueue:
 			central_report.on_site_after_insert(self._site())
 		kwargs = enqueue.call_args.kwargs
 		self.assertEqual(kwargs["event_type"], "site.created")
@@ -231,10 +311,7 @@ class TestCentralReportSite(IntegrationTestCase):
 		self.assertEqual(kwargs["payload"]["subdomain"], "acme")
 
 	def test_status_change_emits_and_pending_hides_handoff(self) -> None:
-		with (
-			patch.object(central_report, "_enabled", return_value=True),
-			patch.object(central_report.frappe, "enqueue") as enqueue,
-		):
+		with _patched_emit() as enqueue:
 			central_report.on_site_update(self._site(status="Provisioning", before_status="Pending"))
 		payload = enqueue.call_args.kwargs["payload"]
 		self.assertEqual(enqueue.call_args.kwargs["event_type"], "site.status_changed")
@@ -243,10 +320,7 @@ class TestCentralReportSite(IntegrationTestCase):
 		self.assertIsNone(payload["admin_password"])
 
 	def test_running_event_carries_handoff(self) -> None:
-		with (
-			patch.object(central_report, "_enabled", return_value=True),
-			patch.object(central_report.frappe, "enqueue") as enqueue,
-		):
+		with _patched_emit() as enqueue:
 			central_report.on_site_update(self._site(status="Running", before_status="Deploying"))
 		payload = enqueue.call_args.kwargs["payload"]
 		self.assertEqual(payload["url"], "https://acme.blr1.frappe.dev")

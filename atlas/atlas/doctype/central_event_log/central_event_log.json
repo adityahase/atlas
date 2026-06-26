@@ -1,0 +1,146 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "hash",
+ "creation": "2026-06-26 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "MyISAM",
+ "field_order": [
+  "tab_overview",
+  "event_type",
+  "status",
+  "attempts",
+  "column_break_header",
+  "occurred_at",
+  "http_status",
+  "section_break_reference",
+  "reference_doctype",
+  "reference_name",
+  "section_break_detail",
+  "last_error",
+  "payload"
+ ],
+ "fields": [
+  {
+   "fieldname": "tab_overview",
+   "fieldtype": "Tab Break",
+   "label": "Overview"
+  },
+  {
+   "description": "The Central event type, e.g. vm.status_changed | site.created | snapshot.completed | server.status_changed.",
+   "fieldname": "event_type",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Event Type",
+   "read_only": 1
+  },
+  {
+   "description": "pending = emitted, delivery not (yet) run — also the terminal state when the emitting transaction rolled back (the after-commit deliver job never fired). ok = POSTed. error = Central rejected/unreachable, see Last Error. skipped = enabled but not registered (no atlas_id), so unroutable.",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "pending\nok\nerror\nskipped",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "How many times deliver() POSTed this row. 0 while pending; 1 once delivered (v1 has no retry).",
+   "fieldname": "attempts",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Attempts",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_header",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "When the event occurred (stamped at emit, carried verbatim to Central as occurred_at).",
+   "fieldname": "occurred_at",
+   "fieldtype": "Datetime",
+   "label": "Occurred At",
+   "read_only": 1
+  },
+  {
+   "description": "The HTTP status Central returned on the last attempt. 0 / blank when the request never got a response (network error) or was never sent (pending / skipped).",
+   "fieldname": "http_status",
+   "fieldtype": "Int",
+   "label": "HTTP Status",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_reference",
+   "fieldtype": "Section Break",
+   "label": "Reference"
+  },
+  {
+   "description": "The source DocType this event reports on, e.g. Virtual Machine | Site | Virtual Machine Snapshot | Server.",
+   "fieldname": "reference_doctype",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Reference DocType",
+   "read_only": 1
+  },
+  {
+   "description": "The source document name as a Data SNAPSHOT (NOT a Link): an event log row must survive deletion of the VM / Site it reports on — a vm.deleted row outlives its VM by definition.",
+   "fieldname": "reference_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Reference Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_detail",
+   "fieldtype": "Section Break",
+   "label": "Detail"
+  },
+  {
+   "description": "The error text from the last failed attempt (CentralError). BLANK on ok / pending / skipped.",
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  },
+  {
+   "description": "The exact event payload POSTed (or to be POSTed) to Central, as JSON.",
+   "fieldname": "payload",
+   "fieldtype": "Code",
+   "label": "Payload",
+   "options": "JSON",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2026-06-26 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Atlas",
+ "name": "Central Event Log",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "amend": 0,
+   "cancel": 0,
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "import": 0,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "submit": 0,
+   "write": 1
+  }
+ ],
+ "search_fields": "event_type,status,reference_doctype,reference_name",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}
