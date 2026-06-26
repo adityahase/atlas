@@ -112,6 +112,8 @@ def run(config: dict) -> dict:
 			billing=scw.get("billing", "hourly"),
 			ssh_key_id=scw.get("ssh_key_id"),
 		)
+	elif provider_type == "Fake":
+		_seed_fake_catalog()
 	# Self-Managed has no vendor Single — its networking rides the provision payload.
 
 	summary = {"provider_type": provider_type}
@@ -304,6 +306,20 @@ def _stage_provider(args: dict) -> None:
 			billing=args.get("scw_billing") or "hourly",
 			ssh_key_id=args.get("scw_ssh_key_id") or None,
 		)
+	elif provider_type == "Fake":
+		_seed_fake_catalog()
+
+
+def _seed_fake_catalog() -> None:
+	"""Seed the Fake provider's synthetic Provider Size / Provider Image catalog.
+
+	Fake has no vendor Single, so neither `run()` nor the wizard's `_stage_provider`
+	writes one — but the Provision dialog still needs catalog rows. Seed them at
+	setup time (the desk Refresh Catalog button does the same later)."""
+	from atlas.atlas import provisioning
+	from atlas.atlas.providers.fake import FakeProvider
+
+	provisioning.upsert_catalog("Fake", FakeProvider().discover())
 
 
 LETS_ENCRYPT_PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
@@ -335,8 +351,18 @@ def _resolve_acme_url(args: dict) -> str | None:
 
 
 def on_complete(args: dict | None = None) -> None:
-	"""`setup_wizard_complete` hook — runs after all stages commit. No-op today (the
-	Singles are configured; the operator drives provisioning from Atlas Settings)."""
+	"""`setup_wizard_complete` hook — runs after all stages commit, so Atlas Settings
+	is already configured. The only post-setup action: if the operator picked the Fake
+	provider and ticked "Generate demo data after setup", enqueue the demo fleet
+	(`atlas.atlas.demo.run`) so the desk is populated immediately. Otherwise a no-op —
+	provisioning is operator-driven from Atlas Settings."""
+	args = args or {}
+	if (
+		args.get("provider_type") == "Fake"
+		and _truthy(args.get("fake_generate_demo_data"))
+		and frappe.conf.developer_mode
+	):
+		frappe.enqueue("atlas.atlas.demo.run", queue="long", timeout=1800)
 
 
 def _truthy(value: object) -> bool:
@@ -358,11 +384,18 @@ def wizard_discover(provider_type: str, credentials: dict | str | None = None) -
 	the catalog into Provider Size / Provider Image (via `_persist_catalog`, the same
 	`upsert_catalog` the desk Refresh Catalog button drives) — so the rows exist the
 	moment Test Connection goes green, not only after a later Refresh. The vendor
-	Singles are still untouched until Complete Setup. Returns a plain dict:
+	Singles are still untouched until Complete Setup.
+
+	If `credentials.ssh_private_key_path` is given (the controller key from the Atlas
+	slide), the probe derives its public half and **find-or-registers it with the
+	vendor**, returning the resolved key id as `matched_ssh_key_id` — so after a green
+	Test Connection the wizard always has a concrete vendor SSH key, whether it already
+	existed or was just uploaded. Returns a plain dict:
 
 	    {"ok": bool, "account_label": str|None, "error": str|None,
 	     "sizes":  [{"value","label"}], "images": [{"value","label"}],
-	     "ssh_keys": [{"value","label"}], "projects": [{"value","label"}]}
+	     "ssh_keys": [{"value","label"}], "projects": [{"value","label"}],
+	     "matched_ssh_key_id": str|None}
 
 	`sizes`/`images` use the vendor-native slug as `value` (what the slug fields
 	store). Never raises — a bad credential comes back as `{"ok": False, "error": …}`
@@ -386,7 +419,23 @@ def wizard_discover(provider_type: str, credentials: dict | str | None = None) -
 		"images": [],
 		"ssh_keys": [],
 		"projects": [],
+		"matched_ssh_key_id": None,
 	}
+
+
+def _controller_public_key(credentials: dict) -> str | None:
+	"""The controller's OpenSSH public key, derived from the `ssh_private_key_path`
+	the operator gave on the Atlas slide (passed through `credentials`). None when no
+	path was given or the key can't be read — the probe then just lists vendor keys
+	without auto-resolving one (operator picks/uploads later, as before)."""
+	import os
+
+	from atlas.atlas.doctype.atlas_settings.atlas_settings import AtlasSettings
+
+	path = (credentials.get("ssh_private_key_path") or "").strip()
+	if not path:
+		return None
+	return AtlasSettings._derive_public_key(os.path.expanduser(path))
 
 
 def _persist_catalog(provider_type: str, sizes, images) -> None:
@@ -426,6 +475,7 @@ def _discover_digitalocean(credentials: dict) -> dict:
 		"images": [{"value": slug, "label": slug} for slug in KNOWN_DIGITALOCEAN_IMAGES],
 		"ssh_keys": [],
 		"projects": [],
+		"matched_ssh_key_id": None,
 	}
 	token = credentials.get("api_token")
 	if not token:
@@ -438,6 +488,11 @@ def _discover_digitalocean(credentials: dict) -> dict:
 			{"value": str(key["id"]), "label": key.get("name") or str(key["id"])}
 			for key in client.list_ssh_keys()
 		]
+		# Resolve the controller key to a concrete vendor key: ensure_ssh_key matches
+		# the existing one by identity or uploads it, so the wizard never leaves it blank.
+		public_key = _controller_public_key(credentials)
+		if public_key:
+			result["matched_ssh_key_id"] = client.ensure_ssh_key("atlas-controller", public_key)
 	except Exception as exception:  # any failure becomes a red toast, never a traceback
 		result["error"] = str(exception)
 		return result
@@ -473,6 +528,7 @@ def _discover_scaleway(credentials: dict) -> dict:
 		"images": [],
 		"ssh_keys": [],
 		"projects": [],
+		"matched_ssh_key_id": None,
 	}
 	secret_key = credentials.get("secret_key")
 	zone = credentials.get("zone")
@@ -493,11 +549,15 @@ def _discover_scaleway(credentials: dict) -> dict:
 		images = [_image_from_os(os_image) for os_image in client.list_os()]
 		result["sizes"] = [_size_label_dict(size) for size in sizes]
 		result["images"] = [{"value": img.slug, "label": img.slug} for img in images]
+		# SSH keys are project-scoped on Scaleway — only resolvable once a project is picked.
 		if project_id:
-			result["ssh_keys"] = [
-				{"value": key["id"], "label": key.get("name") or key["id"]}
-				for key in client.list_ssh_keys(project_id)
-			]
+			keys = client.list_ssh_keys(project_id)
+			result["ssh_keys"] = [{"value": key["id"], "label": key.get("name") or key["id"]} for key in keys]
+			# Resolve the controller key to a concrete IAM key: reuse one matched by
+			# identity, else register it — so the wizard never leaves it blank.
+			public_key = _controller_public_key(credentials)
+			if public_key:
+				result["matched_ssh_key_id"] = _scw_ensure_ssh_key(client, keys, public_key, project_id)
 	except Exception as exception:  # any failure becomes a red toast, never a traceback
 		result["error"] = str(exception)
 		return result
@@ -506,6 +566,21 @@ def _discover_scaleway(credentials: dict) -> dict:
 	_persist_catalog("Scaleway", sizes, images)
 	result["account_label"] = auth.get("account_label") or _("Scaleway")
 	return result
+
+
+def _scw_ensure_ssh_key(client, keys: list[dict], public_key: str, project_id: str) -> str:
+	"""Return the Scaleway IAM key id for `public_key`, registering it if absent.
+
+	Matched on the `<type> <base64>` identity (the same primitive the provider's
+	`_find_ssh_key_id` uses) against the project's already-listed `keys`, so a differing
+	comment doesn't cause a duplicate upload."""
+	from atlas.atlas.providers.scaleway import _ssh_key_identity
+
+	wanted = _ssh_key_identity(public_key)
+	for key in keys:
+		if _ssh_key_identity(key.get("public_key") or "") == wanted:
+			return key["id"]
+	return client.register_ssh_key("atlas-controller", public_key, project_id)["id"]
 
 
 def _size_label(slug: str, monthly_cost_usd: int | None) -> str:
