@@ -199,7 +199,7 @@ class TestWarmScripts(unittest.TestCase):
 			signature["cpu_flags_sha256"],
 			hostinfo.parse_cpu_signature(reordered)["cpu_flags_sha256"],
 		)
-		self.assertEqual(hostinfo.parse_firecracker_version("Firecracker v1.15.1\n"), "v1.15.1")
+		self.assertEqual(hostinfo.parse_firecracker_version("Firecracker v1.16.0\n"), "v1.16.0")
 
 
 class TestGuestWarmTooling(unittest.TestCase):

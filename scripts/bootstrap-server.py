@@ -150,7 +150,7 @@ class BootstrapInputs(TaskInputs):
 	"""Turn a fresh Ubuntu 24.04 host into a Firecracker host (idempotent)."""
 
 	command: typing.ClassVar[str] = "bootstrap-server"
-	firecracker_version: str  # e.g. v1.15.1
+	firecracker_version: str  # e.g. v1.16.0
 	architecture: str  # e.g. x86_64 (must match `uname -m`)
 
 
