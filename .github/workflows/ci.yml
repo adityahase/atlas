@@ -11,6 +11,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The host-side scripts (scripts/) run under the Atlas venv (CPython 3.14) on a
+  # bootstrapped host, but bootstrap-server.py itself runs on the host's stock
+  # python3 — it is what CREATES the venv (the carve-out) — so the scripts must
+  # still PARSE on the lowest Python a managed host ships (Ubuntu 24 = py3.12).
+  # py3.14 re-legalises `except A, B:` (PEP 758), a SyntaxError on 3.12; this gate
+  # catches that floor trap before it reaches a fresh host. It needs no bench: the
+  # lib unit-tests run standalone by design.
+  host-scripts:
+    runs-on: ubuntu-latest
+    name: Host scripts (py3.12 floor)
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v5
+      - name: Parse on the floor (py3.12)
+        run: uv run --python 3.12 --no-project python -m compileall -q scripts/
+      - name: Lib + CLI unit tests (stdlib, no bench) with coverage
+        working-directory: scripts/lib
+        # coverage is pulled ephemerally by uv (--with); it is NOT a project
+        # dependency — the host code itself stays pure stdlib. `coverage run -m
+        # unittest` is a drop-in for `python -m unittest`. We emit both an XML
+        # (machine-readable) and a self-contained HTML report to browse locally.
+        run: |
+          uv run --python 3.12 --no-project --with coverage \
+            coverage run --source=atlas --omit="atlas/test_*.py" \
+            -m unittest discover -s atlas -p "test_*.py"
+          uv run --python 3.12 --no-project --with coverage coverage report
+          uv run --python 3.12 --no-project --with coverage coverage xml -o coverage.xml
+          uv run --python 3.12 --no-project --with coverage coverage html -d htmlcov
+
+      - name: Upload host-scripts coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-host-scripts
+          path: |
+            scripts/lib/coverage.xml
+            scripts/lib/htmlcov
+
   tests:
     runs-on: ubuntu-latest
     strategy:

@@ -14,7 +14,8 @@ pin, update the matching row.
 There are four independent chains, by the host they land on:
 
 1. **The Firecracker host** (every server) — Firecracker/jailer binaries, the
-   pinned host interpreter, apt packages, and the guest kernel + rootfs images.
+   Atlas venv interpreter (`uv` + CPython), apt packages, and the guest kernel +
+   rootfs images.
 2. **The proxy guest** (proxy VMs only) — the nginx + Lua module stack, built
    from source inside the guest.
 3. **The controller** (the Atlas Frappe host) — the TLS issuance toolchain.
@@ -31,8 +32,8 @@ Installed by [`scripts/bootstrap-server.py`](../scripts/bootstrap-server.py) and
 | Artefact | Version | Source | Pinned in | Checksum? |
 | --- | --- | --- | --- | --- |
 | `firecracker` + `jailer` binaries (one tarball) | `v1.16.0` | `github.com/firecracker-microvm/firecracker/releases` | `atlas/atlas/doctype/server/server.py` (the bootstrap call); default in `atlas/atlas/scripts_catalog.py` | **No** — trusts the GitHub release URL |
-| `uv` (host interpreter installer) | `0.9.30` | `astral.sh/uv/<version>/install.sh` | `UV_VERSION` in `scripts/bootstrap-server.py` | No — version is in the URL |
-| CPython (the pinned host interpreter) | `3.14.3` | fetched by `uv` (python-build-standalone) | `PY_VERSION` in `scripts/bootstrap-server.py` | `uv` verifies its own download |
+| `uv` (creates the Atlas venv) | `0.9.30` | `astral.sh/uv/<version>/install.sh` | `UV_VERSION` in `scripts/bootstrap-server.py` | No — version is in the URL |
+| CPython (the Atlas venv interpreter) | `3.14.3` | fetched by `uv` (python-build-standalone) | `PY_VERSION` in `scripts/bootstrap-server.py` | `uv` verifies its own download |
 | Guest kernel (`vmlinux`, from a packed `vmlinuz`) | Ubuntu Noble build | `cloud-images.ubuntu.com` | the `Virtual Machine Image` row's `kernel_url` / `kernel_sha256` (e2e default in `atlas/tests/e2e/_config.py`) | **Yes** — `kernel_sha256` of the packed artefact |
 | Guest rootfs (`.squashfs` → ext4) | Ubuntu Noble build | `cloud-images.ubuntu.com` | the `Virtual Machine Image` row's `rootfs_url` / `rootfs_sha256` | **Yes** — `rootfs_sha256` of the source squashfs |
 | apt packages | distro versions (Ubuntu 24.04 repos) | Ubuntu archive | `PACKAGES` in `scripts/bootstrap-server.py` | apt signature chain |

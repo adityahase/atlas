@@ -421,8 +421,18 @@ never touches real DO/Scaleway rows.
 
 - **Host-key pinning**. See above.
 
-- **CLI**. A small `atlas` CLI that calls Frappe's REST API. The DocType
-  methods we expose for buttons become the CLI's commands. Pure additive.
+- **CLI grammar (Phase 2)**. The host `atlas` CLI ships in Phase 1 with the
+  script stems as verbs (`atlas stop-vm …`, installed at bootstrap — see
+  [03-bootstrapping.md § The `atlas` host CLI](./03-bootstrapping.md)). Phase 2
+  reshapes that into a natural verb/noun grammar (`atlas vm stop`,
+  `atlas vm resize`) over the same dispatch, and extends the CLI to the
+  controller so controller-only scripts run as `atlas mgmt-firewall-apply …`
+  where they belong. Done as its own change, isolated from the Phase-1 install.
+
+- **REST CLI**. A separate, thinner `atlas` that calls Frappe's REST API from an
+  operator's laptop (not the host): the DocType methods we expose for buttons
+  become its commands. Distinct from the host CLI above, which dispatches the
+  durable Task scripts in place. Pure additive.
 
 - **Multi-arch**. Drop the `ARCHITECTURE` hard-coding; allow `aarch64`. The
   Ubuntu cloud archive publishes arm64 squashfs + `unpacked/` kernels per

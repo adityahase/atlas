@@ -67,6 +67,14 @@ class TestServerBootstrap(IntegrationTestCase):
 		for script in scripts_catalog.host_task_scripts():
 			self.assertIn(f"/var/lib/atlas/bin/{script}", destinations)
 
+	def test_bootstrap_ships_the_host_pip_manifest(self) -> None:
+		# bootstrap-server.py's ensure_atlas_env() runs `uv pip install
+		# /var/lib/atlas/bin`, which needs a pyproject.toml at that root. The
+		# host manifest (host-pyproject.toml) must ship there for the install.
+		uploads = dict((dest, src) for src, dest in self.server._script_uploads())
+		self.assertIn("/var/lib/atlas/bin/pyproject.toml", uploads)
+		self.assertTrue(uploads["/var/lib/atlas/bin/pyproject.toml"].endswith("host-pyproject.toml"))
+
 	def test_bootstrap_parses_result_line(self) -> None:
 		from atlas.atlas.doctype.server import server as server_module
 

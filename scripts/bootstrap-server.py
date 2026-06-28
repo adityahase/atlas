@@ -23,6 +23,7 @@ from atlas._run import install_directory, install_file, run, run_input, run_ok
 from atlas._task import TaskInputs, TaskResult
 from atlas.lvm import ThinPool
 from atlas.network_env import default_route_device
+from atlas.paths import ATLAS_CLI, ATLAS_PYTHON, ATLAS_VENV, BIN_DIRECTORY
 
 # --- the big sysctl drop-in, verbatim from the shell heredoc (step 4) ---
 SYSCTL_CONF = """\
@@ -167,6 +168,111 @@ PACKAGES = [
 	"wireguard-tools",
 ]
 
+# --- the host's Atlas interpreter (a uv-managed venv on CPython 3.14) ---
+# uv is a normal host tool: bootstrap installs it, then creates a virtualenv on a
+# uv-controlled CPython 3.14 and `uv pip install`s the atlas package into it. Every
+# OTHER Task and every VM-boot hook then runs that venv's python (the runner's
+# ATLAS_PYTHON, the systemd units). This is what frees Atlas from the host's
+# `python3` version — controller and host run the same CPython no matter what
+# Ubuntu shipped. Re-running bootstrap re-converges the venv (idempotent), the same
+# refresh point the durable scripts already use.
+UV_VERSION = "0.9.30"  # PINNED exact, not "latest" (the install URL embeds it)
+PY_VERSION = "3.14.3"  # the CPython uv installs into the venv
+UV_DIR = "/var/lib/atlas/uv"  # uv binary + its managed interpreters, under one root
+# ATLAS_VENV / ATLAS_PYTHON / ATLAS_CLI come from atlas.paths (the single
+# host-path source of truth; the units and the runner reference the same
+# /var/lib/atlas/venv).
+
+
+def ensure_atlas_env() -> str:
+	"""Install uv, create a uv-managed venv on CPython 3.14, `uv pip install` the
+	atlas package into it, expose its `atlas` console script on PATH, and prove (a
+	deep sanity gate) the interpreter the units will use actually works. Idempotent
+	like the rest of bootstrap; returns the resolved `python --version` string
+	(emitted in BootstrapResult).
+
+	This whole function runs on the host's `/usr/bin/python3` (the bootstrap
+	carve-out: bootstrap is what creates the venv, so it cannot require it). uv's
+	network fetch is the only online step.
+	"""
+	# 1. Install the PINNED uv to the fixed dir. UV_UNMANAGED_INSTALL governs the
+	#    uv BINARY's location (no PATH/profile edits); UV_INSTALL_DIR is where it
+	#    lands. The version is in the URL, so this never silently rolls forward.
+	run(
+		"sudo",
+		"env",
+		f"UV_INSTALL_DIR={UV_DIR}",
+		"UV_UNMANAGED_INSTALL=1",
+		"sh",
+		"-c",
+		f"curl -LsSf https://astral.sh/uv/{UV_VERSION}/install.sh | sh",
+	)
+	uv = f"{UV_DIR}/uv"
+
+	# 2. Create the venv on a uv-controlled CPython 3.14 (uv fetches the interpreter
+	#    if absent — kept inside the single /var/lib/atlas/uv tree). `uv venv` is
+	#    idempotent on an existing venv of the same Python. UV_PYTHON_INSTALL_DIR
+	#    keeps the managed interpreter under one root.
+	run(
+		"sudo",
+		"env",
+		f"UV_PYTHON_INSTALL_DIR={UV_DIR}",
+		uv,
+		"venv",
+		"--python",
+		PY_VERSION,
+		ATLAS_VENV,
+	)
+
+	# 3. Install the atlas package into the venv from the durable tree the caller
+	#    already scp'd to /var/lib/atlas/bin (Server.bootstrap → upload_files, BEFORE
+	#    this Task). This materialises the `atlas` console script at
+	#    {ATLAS_VENV}/bin/atlas (its pyproject declares atlas = atlas._cli:main).
+	#    `--reinstall` so a re-bootstrap after a code edit refreshes the install.
+	run(
+		"sudo",
+		"env",
+		f"VIRTUAL_ENV={ATLAS_VENV}",
+		uv,
+		"pip",
+		"install",
+		"--reinstall",
+		BIN_DIRECTORY,
+	)
+
+	# 4. Expose the console script on PATH for an operator (login shells AND sudo),
+	#    no profile edits — /usr/local/bin is FHS-correct for local admin binaries.
+	run("sudo", "ln", "-sfn", ATLAS_CLI, "/usr/local/bin/atlas")
+
+	# 5. DEEP sanity gate (the safety). A green `import atlas` does NOT prove the
+	#    units run, so exercise what they ACTUALLY do: atlas-pool.service's inline
+	#    `from atlas.lvm import ThinPool` (the largest module, likeliest stdlib
+	#    gap on a fresh interpreter), that the 4 firecracker-vm@.service boot hooks
+	#    PARSE on the venv python (py_compile), and that the `atlas` console script
+	#    dispatches. A broken venv must fail the bootstrap HERE — before the units
+	#    are uploaded to point at it. No `sudo`: bootstrap already runs as root, the
+	#    durable .py files + the 0755 bin dir are root-owned, and the
+	#    import/py_compile only read them.
+	version = run(ATLAS_PYTHON, "--version").strip()
+	if PY_VERSION not in version:
+		sys.exit(f"Atlas venv python is {version!r}, expected {PY_VERSION}")
+	run(
+		ATLAS_PYTHON,
+		"-c",
+		f"import sys; sys.path.insert(0, {BIN_DIRECTORY!r}); from atlas.lvm import ThinPool",
+	)
+	run(
+		ATLAS_PYTHON,
+		"-m",
+		"py_compile",
+		f"{BIN_DIRECTORY}/vm-disk-up.py",
+		f"{BIN_DIRECTORY}/vm-network-up.py",
+		f"{BIN_DIRECTORY}/vm-network-down.py",
+		f"{BIN_DIRECTORY}/vm-restore.py",
+	)
+	run(ATLAS_CLI, "--help", quiet=True)
+	return version
+
 
 @dataclass(frozen=True)
 class BootstrapInputs(TaskInputs):
@@ -183,6 +289,12 @@ class BootstrapResult(TaskResult):
 	jailer_version: str
 	kernel_version: str
 	architecture: str
+	# The resolved Atlas venv python (`/var/lib/atlas/venv/bin/python --version`).
+	# Carried on the BootstrapResult line so the bootstrap log shows which CPython
+	# the host's Tasks now run under. It is DERIVED state — no Server doctype field
+	# backs it (the venv + the controller's PY_VERSION constant are live truth), so
+	# the controller reads it for display only, never persists it.
+	python_version: str
 
 
 def _uname(flag: str) -> str:
@@ -428,6 +540,19 @@ def main() -> None:
 	install_directory("/var/lib/atlas/run", mode="0700")
 	install_directory("/var/lib/atlas/bin", mode="0755")
 
+	# 10a. Create the Atlas venv (uv-managed CPython 3.14) and install the package
+	#      into it. The caller already scp'd the durable atlas package + the 4 boot
+	#      hooks into /var/lib/atlas/bin (Server.bootstrap → upload_files, BEFORE
+	#      this Task), so `uv pip install` has the source and the deep sanity gate
+	#      can exercise the real `from atlas.lvm import ThinPool` + py_compile the
+	#      hooks. LOCKED ORDER: this runs — and its sanity gate proves the venv
+	#      python resolves — BEFORE the daemon-reload (step 11) that lets systemd
+	#      pick up the venv-interpreter units. A broken venv fails the bootstrap
+	#      here; a unit never points at a missing /var/lib/atlas/venv. The carve-out
+	#      keeps THIS script on /usr/bin/python3 (it creates the venv); every other
+	#      Task + every boot hook then uses the venv python.
+	python_version = ensure_atlas_env()
+
 	# 11. Helper scripts and systemd unit are uploaded alongside this script by
 	#     the caller, into /var/lib/atlas/bin/ and /etc/systemd/system/. See
 	#     spec/03-bootstrapping.md for the exact list. scp preserves source perms,
@@ -483,6 +608,7 @@ def main() -> None:
 		jailer_version=_binary_version("/usr/local/bin/jailer"),
 		kernel_version=_uname("-r"),
 		architecture=_uname("-m"),
+		python_version=python_version,
 	)
 	install_directory("/var/lib/atlas", mode="0755")
 	install_file(_bootstrap_json(result), "/var/lib/atlas/bootstrap.json", mode="0644")
@@ -492,8 +618,9 @@ def main() -> None:
 
 
 def _bootstrap_json(result: BootstrapResult) -> str:
-	"""The canonical /var/lib/atlas/bootstrap.json bytes — the same four keys the
-	shell `jq -nc` wrote, kept as the on-disk source of truth."""
+	"""The canonical /var/lib/atlas/bootstrap.json bytes — the four keys the shell
+	`jq -nc` wrote (firecracker/jailer/kernel/architecture) plus the resolved
+	pinned `python_version`, kept as the on-disk source of truth."""
 	return json.dumps(dataclasses.asdict(result))
 
 

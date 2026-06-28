@@ -184,9 +184,9 @@ def _check_test_connection(server) -> None:
 	an explanatory error message; both drive the same code path."""
 	provider = providers.for_provider_type(server.provider_type)
 	result = provider.authenticate()
-	assert "ok" in result, result
-	if not result["ok"]:
-		error = result.get("error") or ""
+	assert isinstance(result.ok, bool), result
+	if not result.ok:
+		error = result.error or ""
 		assert "401" in error or "403" in error or "forbidden" in error.lower(), error
 
 

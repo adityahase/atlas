@@ -169,6 +169,10 @@ def _bootstrap_result(_variables: dict) -> dict:
 		"jailer_version": "v1.16.0",
 		"kernel_version": "6.1.0-fake",
 		"architecture": "x86_64",
+		# The Atlas venv python the real bootstrap resolves (display-only — no
+		# Server field backs it). Mirror the real BootstrapResult shape so a fake
+		# host's result line is byte-shaped like a real one.
+		"python_version": "Python 3.14.3",
 	}
 
 

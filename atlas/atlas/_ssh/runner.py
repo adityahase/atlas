@@ -28,6 +28,19 @@ if TYPE_CHECKING:
 # the package's PARENT so `import atlas` resolves the `atlas/` directory under it.
 DURABLE_PACKAGE_DIRECTORY = "/var/lib/atlas/bin"
 
+# The host's Atlas interpreter: a uv-managed virtualenv on CPython 3.14, created
+# once by bootstrap-server.py's ensure_atlas_env(). Every Python Task runs under
+# THIS, not the host's `/usr/bin/python3`, so the controller and its hosts run the
+# same CPython no matter what Ubuntu shipped. See spec/03-bootstrapping.md.
+#
+# THE BOOTSTRAP CARVE-OUT: `bootstrap-server.py` is what CREATES this venv, so on
+# a fresh host it does not exist yet — that one script must run on the host's
+# `/usr/bin/python3`. Every OTHER .py Task uses the venv python. (The controller's
+# runner keeps its own copy of this literal — the host trees don't share imports;
+# the host-side mirror is `atlas.paths.ATLAS_PYTHON`.)
+ATLAS_PYTHON = "/var/lib/atlas/venv/bin/python"
+BOOTSTRAP_SCRIPT = "bootstrap-server.py"
+
 # Where the pre-cutover runner staged the package per Task. The entry points'
 # `sys.path.insert(0, <staging>/lib)` shim puts this AHEAD of PYTHONPATH, so a
 # leftover copy on a legacy host shadows the durable package with stale modules.
@@ -225,6 +238,16 @@ def _run_remote_script(
 	durable_remote = scripts_catalog.durable_remote_path(script)
 
 	with ssh_key_file(connection.ssh_private_key) as key_path:
+		# Fail-loud, not fallback: a non-bootstrap .py Task runs under the Atlas
+		# venv python (_remote_command). If the venv is absent the host's bootstrap
+		# never finished (or half-failed); refuse rather than silently degrade to the
+		# host python3 — the venv is the whole point of running a controlled CPython.
+		# ONE cheap test -e over the same ControlMaster socket, before any staging.
+		# bootstrap-server.py is exempt by the carve-out (it CREATES the venv); .sh
+		# tasks don't use it.
+		if script.endswith(".py") and script != BOOTSTRAP_SCRIPT:
+			_require_atlas_env(connection, key_path)
+
 		# Fast path: the script is shipped durably at /var/lib/atlas/bin (by
 		# bootstrap/sync_scripts, like the atlas package and the systemd hooks) and
 		# needs no per-Task sidecar, so invoke it in place — one round trip, no
@@ -288,6 +311,20 @@ def _run_remote_script(
 		return run_ssh(connection, key_path, command, timeout_seconds=timeout_seconds)
 
 
+def _require_atlas_env(connection: Connection, key_path: str) -> None:
+	"""Fail loud if the host has no Atlas venv python.
+
+	A single `test -e /var/lib/atlas/venv/bin/python` over the existing connection.
+	The venv is created by bootstrap-server.py's ensure_atlas_env() behind a sanity
+	gate, so its presence is the proof the interpreter the Task is about to run
+	under actually exists. Absent → re-bootstrap, don't degrade.
+	"""
+	guard = f"test -e {shlex.quote(ATLAS_PYTHON)}"
+	_stdout, _stderr, exit_code = run_ssh(connection, key_path, guard, timeout_seconds=30)
+	if exit_code != 0:
+		frappe.throw(f"host has no Atlas venv ({ATLAS_PYTHON} missing) — re-bootstrap the server")
+
+
 def _remote_command(script: str, remote_script_path: str, variables: dict) -> str:
 	"""Build the remote invocation for a staged script.
 
@@ -312,7 +349,12 @@ def _remote_command(script: str, remote_script_path: str, variables: dict) -> st
 	quoted_path = shlex.quote(remote_script_path)
 	if script.endswith(".py"):
 		args = _variables_to_flags(variables)
-		return f"PYTHONPATH={DURABLE_PACKAGE_DIRECTORY} python3 {quoted_path} {args}".strip()
+		# THE BOOTSTRAP CARVE-OUT: bootstrap-server.py creates the Atlas venv, so it
+		# cannot require it — it runs on the host's python3. Every other .py Task
+		# runs under the venv python. No silent fallback to the host python3:
+		# _run_remote_script's test -e guard fails loud if the venv is absent.
+		interpreter = "python3" if script == BOOTSTRAP_SCRIPT else ATLAS_PYTHON
+		return f"PYTHONPATH={DURABLE_PACKAGE_DIRECTORY} {interpreter} {quoted_path} {args}".strip()
 	env_prefix = " ".join(f"{key}={shlex.quote(str(value))}" for key, value in variables.items())
 	return f"env {env_prefix} bash -x {quoted_path}".strip()
 

@@ -103,10 +103,14 @@ keep it the source of truth.
    `placement.py`); the operator still owns which servers are Active. That is a
    default, not a scheduler.
 5. **Few dependencies.** Frappe + standard library + the system `ssh` command.
-   On the server: the stock `python3` (the task scripts are stdlib-only — no
-   pip installs), `firecracker`, `systemd`, `iproute2`, `nftables`, `curl`,
-   `jq`, `e2fsprogs`, `squashfs-tools`, `lvm2`, `thin-provisioning-tools`. No
-   agent runs on the server.
+   On the server: a uv-managed virtualenv on CPython 3.14 that bootstrap creates
+   and `uv pip install`s the `atlas` package into (the task scripts run under it,
+   not the host's stock `python3`; see
+   [03-bootstrapping.md § The Atlas interpreter and CLI](./03-bootstrapping.md)),
+   plus `firecracker`, `systemd`, `iproute2`, `nftables`, `curl`, `jq`,
+   `e2fsprogs`, `squashfs-tools`, `lvm2`, `thin-provisioning-tools`. The package
+   is stdlib-only today, but installing it the standard way means a real
+   dependency is fine. No agent runs on the server.
 6. **Don't import — copy.** If a third-party library has a good idea (pyinfra,
    zx), reimplement the small subset we need. We avoid library coupling on a
    foundational layer.

@@ -157,6 +157,28 @@ class TestSetupContract(IntegrationTestCase):
 		)
 		self.assertTrue(frappe.db.exists("Provider Size", "DigitalOcean/s-2vcpu-4gb-intel"))
 
+	def test_default_size_outside_discover_set_stays_enabled(self) -> None:
+		"""A configured `default_size` the provider's `discover()` doesn't know about
+		must still resolve as the default.
+
+		`upsert_catalog` runs first and disables every enabled Size row not in the
+		`discover()` set (its stale-row prune); `set_default` then marks the
+		configured slug default. If `set_default` didn't re-enable it, the row would
+		be `is_default=1, enabled=0`, and `default_name` (which filters `enabled=1`)
+		would return "" — the empty size that DO rejects with a 422. Regression test
+		for the e2e default `s-8vcpu-32gb-amd`, which is outside DO_CAPS."""
+		from atlas.atlas.setup_catalog import default_name
+
+		config = _do_config()
+		config["provider"]["digitalocean"]["default_size"] = "s-8vcpu-32gb-amd"
+		setup.run(config)
+		row = frappe.db.get_value(
+			"Provider Size", "DigitalOcean/s-8vcpu-32gb-amd", ["is_default", "enabled"], as_dict=True
+		)
+		self.assertEqual(row.is_default, 1)
+		self.assertEqual(row.enabled, 1, "the configured default must be enabled, not pruned")
+		self.assertEqual(default_name("Provider Size", "DigitalOcean"), "DigitalOcean/s-8vcpu-32gb-amd")
+
 	# --- Scaleway setter (load-bearing discover ordering + casing check) ---
 
 	def test_scaleway_setter_seeds_catalog_and_defaults(self) -> None:

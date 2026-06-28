@@ -57,6 +57,11 @@ class Server(Document):
 	# /var/lib/atlas/bin (their sys.path shim adds that dir). The package itself
 	# replaces the old durable lvm.sh — there is no shell helper library anymore.
 	BOOTSTRAP_UPLOAD_SOURCES: ClassVar[list[tuple[str, str]]] = [
+		# The pip-install manifest: bootstrap-server.py runs `uv pip install
+		# /var/lib/atlas/bin` into the Atlas venv, which needs a pyproject.toml at
+		# that root. host-pyproject.toml's wheel package root is `atlas` (the flat
+		# durable layout), distinct from the dev scripts/pyproject.toml.
+		("host-pyproject.toml", "/var/lib/atlas/bin/pyproject.toml"),
 		("vm-network-up.py", "/var/lib/atlas/bin/vm-network-up.py"),
 		("vm-network-down.py", "/var/lib/atlas/bin/vm-network-down.py"),
 		# vm-disk-up.py re-activates the VM's thin-snapshot disk LV and refreshes
@@ -284,6 +289,13 @@ class Server(Document):
 		# `ATLAS_RESULT=<json>` line; parse_result pulls it out (the host still
 		# also writes /var/lib/atlas/bootstrap.json as the on-disk source of
 		# truth). Replaces the old "last non-empty stdout line is the JSON" scrape.
+		#
+		# The result also carries `python_version` (the resolved Atlas venv python).
+		# It is deliberately NOT absorbed onto a Server field: it is derived state —
+		# `/var/lib/atlas/venv/bin/python --version` on the host and the bootstrap
+		# script's PY_VERSION constant are both live truth, so persisting a copy
+		# would only drift. It rides the bootstrap log (this Task's stdout) for
+		# visibility; nothing reads it back.
 		parsed = parse_result(stdout)
 		self.firecracker_version = parsed["firecracker_version"]
 		self.jailer_version = parsed["jailer_version"]

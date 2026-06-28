@@ -118,14 +118,24 @@ def wait_for_ssh(connection, timeout_seconds: int = 300) -> None:
 - Variables: how they reach the script depends on the script's language
   (see [§ Tasks are Python](#tasks-are-python-the-zx-slice-we-built)):
   - **`.py` task** —
-    `ssh ... PYTHONPATH=/var/lib/atlas/bin python3 /var/lib/atlas/bin/script.py --kebab-flag val …`.
+    `ssh ... PYTHONPATH=/var/lib/atlas/bin /var/lib/atlas/venv/bin/python /var/lib/atlas/bin/script.py --kebab-flag val …`.
     The `variables` dict keys (`UPPER_SNAKE`) become `--kebab-case` CLI flags;
     a list value becomes a repeated flag. Quoted with `shlex.quote()`. The
     `PYTHONPATH` points `import atlas` at the durable package, and the script
     itself is durable too, so the common case runs it **in place** (next section).
     A *staged* script — a sidecar or an e2e probe — runs from `/tmp/atlas/script.py`.
+    The interpreter is `/var/lib/atlas/venv/bin/python`, the **Atlas venv python**
+    (`ATLAS_PYTHON`), not the host's `/usr/bin/python3` — see
+    [03-bootstrapping.md § The Atlas interpreter and CLI](./03-bootstrapping.md).
+    Two carve-outs: `bootstrap-server.py` runs on the host's `python3` (it is
+    what *creates* the venv — an unconditional swap would brick a fresh host),
+    and before any *other* `.py` Task runs, `_run_remote_script` makes one cheap
+    `test -e /var/lib/atlas/venv/bin/python` over the connection — absent → it
+    **throws** (`re-bootstrap the server`) rather than silently degrading to the
+    host `python3`.
   - **`.sh` task** — `ssh ... env VAR=val VAR2=val2 bash -x /var/lib/atlas/bin/script.sh`.
     The legacy form, kept for the few remaining shell tasks (`reboot-server.sh`).
+    Shell tasks don't use the Atlas venv python and are not guarded.
   Both are built in `_ssh/runner.py::_remote_command()`, dispatched on the
   `.py`/`.sh` suffix.
 
@@ -238,8 +248,11 @@ def main() -> None:
   missing/!int flag for free — the CLI form of `${VAR:?required}`. A `list`
   field is a repeatable flag (`--cgroup-arg a --cgroup-arg b`), which is what
   kills the shell's `mapfile`/word-splitting workaround: a value with an
-  internal space stays one argv token. **This is the shape a future `atlas`
-  CLI mounts directly** — each task is already a subcommand.
+  internal space stays one argv token. **This is the shape the `atlas` host CLI
+  mounts directly** — each task is already a subcommand
+  ([`_cli.py`](../scripts/lib/atlas/_cli.py)); Phase 1 exposes the script stems
+  verbatim (`atlas stop-vm …`), installed at bootstrap (see
+  [03-bootstrapping.md § The `atlas` host CLI](./03-bootstrapping.md)).
 - **Typed output**, not stdout scraping. A task that returns data emits one
   `ATLAS_RESULT=<json>` line via `TaskResult.emit()`; the controller decodes
   it with `task_results.parse_result()`. This replaced the `SIZE_BYTES=` grep
@@ -256,8 +269,10 @@ def main() -> None:
 ### The shared `atlas` package and how it is staged
 
 The lib lives in [`scripts/lib/atlas/`](../scripts/lib/atlas) and is
-**stdlib-only** — that constraint is load-bearing: it is why the logic tests
-with no host. A Task script imports it from **one durable copy** on the host:
+**stdlib-only today** — which is why the logic tests with no host. (That is a
+convenience, not a guarded invariant: the host installs the package into a venv,
+so a real dependency is fine — uv resolves it at `uv pip install`.) A Task script
+imports it from **one durable copy** on the host:
 
 - **Durable placement** (`Server.bootstrap()`): the package is placed once at
   `/var/lib/atlas/bin/atlas/`, beside the three systemd-hook scripts, so they
@@ -299,9 +314,26 @@ run from the VM unit's `ExecStartPre`/`ExecStartPost`/`ExecStopPost`, not over
 SSH. They take a **positional uuid** (`%i`), not `--flags`, and import the
 durable package. They are excluded from
 `scripts_catalog.allowed_scripts()` (`SYSTEMD_HOOKS`) so the Task runner
-never executes them. `atlas-pool.service` runs the pool bring-up
-inline: `python3 -c "… ThinPool().ensure()"`. There is no shell helper
-library (`lvm.sh`) anymore — the durable `atlas` package replaced it.
+never executes them. Like every Python Task they run under the **Atlas venv
+python** — the units invoke `/var/lib/atlas/venv/bin/python <hook> %i`, and
+`atlas-pool.service` runs the pool bring-up inline:
+`/var/lib/atlas/venv/bin/python -c "… ThinPool().ensure()"` (see
+[03-bootstrapping.md § The Atlas interpreter and CLI](./03-bootstrapping.md)).
+There is no shell helper library (`lvm.sh`) anymore — the durable `atlas`
+package replaced it.
+
+A second, **controller-only** bucket (`CONTROLLER_ONLY`: `issue-cert.py`,
+`tunnel-up/down.py`, `mgmt-firewall-*.py`) is also excluded from
+`allowed_scripts()` — those run on the *controller* via the local runner, never
+over SSH onto a host. The host `atlas` CLI ([§ Tasks are Python](#shape-of-a-task-script))
+discovers its commands from the filesystem and **does not** currently filter this
+bucket, so its command set is a superset of the host-SSH catalog. That is a
+known, deferred gap (Phase 2): running one of these on a host mostly just fails
+(they need controller-side context / deps), and the intended fix is to install
+the same CLI on the controller so `atlas mgmt-firewall-apply …` runs where it
+belongs — at which point the CLI's *available* command set is context-dependent
+(host vs controller) rather than wrong. Until Phase 2, do not assume
+`_cli` command set == `allowed_scripts()`.
 
 ## How Python triggers a Task
 

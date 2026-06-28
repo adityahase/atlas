@@ -66,10 +66,16 @@ def clear_other_defaults(doctype: str, provider_type: str, keep: str) -> None:
 def set_default(doctype: str, provider_type: str, slug: str) -> None:
 	"""Mark `provider_type/slug` the lone default for `doctype` (Provider Size/Image).
 
+	Also (re-)enables the row: the default must be selectable, and a configured
+	default slug outside the provider's `discover()` set would otherwise have been
+	disabled by `upsert_catalog`'s prune pass just before this runs — leaving a
+	disabled default that `default_name` (which filters `enabled=1`) can't resolve.
+
 	Saves the row through the ORM so its `validate()` runs `clear_other_defaults`;
 	the named row must already exist (the setters seed/verify it first)."""
 	doc = frappe.get_doc(doctype, f"{provider_type}/{slug}")
 	doc.is_default = 1
+	doc.enabled = 1
 	doc.save(ignore_permissions=True)
 
 

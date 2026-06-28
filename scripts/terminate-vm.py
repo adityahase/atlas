@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from atlas._run import run, run_ok
 from atlas._task import TaskInputs
 from atlas.lvm import ThinPool
-from atlas.paths import VirtualMachinePaths
+from atlas.paths import ATLAS_PYTHON, VirtualMachinePaths
 
 
 @dataclass(frozen=True)
@@ -42,9 +42,14 @@ def main() -> None:
 	# a .py now (the shell port); calling the old .sh path made `sudo` report
 	# "command not found" and, under check=False, silently skipped teardown.
 	if run_ok("sudo", "test", "-f", paths.network_env):
+		# Invoke the hook under the Atlas venv python — the same interpreter the
+		# unit's ExecStopPost uses — not the host's python3, so the hook runs on the
+		# same CPython 3.14 everywhere. terminate-vm.py itself runs under the venv
+		# python (the runner uses it + fail-loud guards its presence), so
+		# ATLAS_PYTHON is guaranteed to exist here.
 		run(
 			"sudo",
-			"python3",
+			ATLAS_PYTHON,
 			"/var/lib/atlas/bin/vm-network-down.py",
 			inputs.virtual_machine_name,
 			check=False,

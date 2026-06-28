@@ -25,6 +25,20 @@ BIN_DIRECTORY = f"{ATLAS_ROOT}/bin"
 # jails, so terminate's rm -rf of a VM tree must never take it.
 SNAPSHOTS_DIRECTORY = f"{ATLAS_ROOT}/snapshots"
 
+# The host's Atlas interpreter: a uv-managed virtualenv on a uv-controlled
+# CPython 3.14, created once by bootstrap-server.py's ensure_atlas_env(). The
+# systemd units and every Python Task run this venv's python, not the host's
+# /usr/bin/python3, so the controller and its hosts run the same CPython no
+# matter what Ubuntu shipped. ATLAS_VENV is the venv root; ATLAS_PYTHON is its
+# python; ATLAS_CLI is the `atlas` console script the install generates in the
+# venv (symlinked onto PATH at /usr/local/bin/atlas). Any in-script invocation of
+# a durable hook (e.g. terminate-vm's fallback teardown) uses ATLAS_PYTHON so it
+# matches what systemd would run. The controller's own runner has its own copy of
+# this literal — the two trees don't share imports.
+ATLAS_VENV = f"{ATLAS_ROOT}/venv"
+ATLAS_PYTHON = f"{ATLAS_VENV}/bin/python"
+ATLAS_CLI = f"{ATLAS_VENV}/bin/atlas"
+
 # AF_UNIX sun_path is 108 bytes including the NUL. The jailed socket's absolute
 # path blows past it, which is why the relative-cd dance exists.
 SUN_PATH_MAX = 108
