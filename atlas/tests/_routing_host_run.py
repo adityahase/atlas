@@ -255,10 +255,24 @@ def _ensure_proxy(server_name: str, region: str) -> str:
 	)
 	if existing:
 		name = existing[0]
-		# Confirm it is SSH-reachable (a stale Running row would waste the whole run).
+		# SSH-reachable is NOT a strong enough reuse gate: a proxy left over from a
+		# killed prior run can be SSH-up yet have nginx dead (never finalized) OR be
+		# built from an OLDER proxy/ tree that predates the admin socket — either way
+		# the admin socket is absent and the run's first proxy-sync gets curl exit 7.
+		# The real reuse test is "does the admin API actually answer", so probe a live
+		# GET /map. If it answers, reuse as-is. If not, re-bake in place (build_proxy
+		# is idempotent and re-stages the current tree + finalize-restarts nginx) —
+		# that heals both the dead-nginx and the stale-config case without burning a
+		# fresh VM.
 		_stdout, _stderr, code = _guest_raw(name, "true", timeout=20)
 		if code == 0:
-			print(f"[host-run] reusing existing proxy {name}")
+			_out, _err, admin_code = _guest_raw(name, proxy._curl_command("GET", "/map"), timeout=30)
+			if admin_code == 0:
+				print(f"[host-run] reusing existing proxy {name} (admin socket live)")
+				return name
+			print(f"[host-run] existing proxy {name} admin socket dead; re-baking in place")
+			proxy.build_proxy(name)
+			print(f"[host-run] proxy {name} re-baked")
 			return name
 		print(f"[host-run] existing proxy {name} unreachable; building a fresh one")
 
