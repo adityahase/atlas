@@ -655,6 +655,51 @@ stores guest-controlled `fwd_headers`/`request_body` verbatim (a size/PII cautio
 any future export). A prune (a deferred sweep or a fixed retention window) is
 **wanted but out of scope for v1**; named here, not built.
 
+## Component L — custom (non-wildcard) domains (Phase 2, SNI passthrough — BUILT)
+
+A **custom domain** is an arbitrary external FQDN the customer already owns
+(`shop.acme.com`), routed to one site VM. It is the full-FQDN sibling of `register`:
+a wildcard subdomain (`app.<region>.frappe.dev`) is one bare label terminated **at the
+proxy** under the regional wildcard cert; a custom domain keys on the **whole host** and
+is **SNI passthrough** — the proxy reads the SNI at L4 (`ssl_preread`, no decrypt) and
+forwards the raw TLS stream to the VM's `:443`; **the VM terminates with its own Let's
+Encrypt cert** ([12-proxy.md § The stream front-door](./12-proxy.md#the-stream-front-door-sni-passthrough-for-custom-domains),
+[13-tls.md § Custom domains](./13-tls.md#custom-domains-sni-passthrough-the-vm-holds-the-cert)).
+The proxy holds **zero** per-domain certs.
+
+- **`Custom Domain` DocType** (`atlas/atlas/doctype/custom_domain/`): autoname
+  `field:domain` (the full FQDN, fleet-unique), `virtual_machine` Link, `address` (the
+  VM's `/128`, denormalized, the passthrough target), `site` (the regional FQDN it
+  aliases — provenance), and `status` Select **Active/Failed** (informational — a
+  registered domain is Active immediately; Failed signals a reconcile error). Hooks mirror
+  `Subdomain` and share the **same dedup reconcile job** (`auto_reconcile_subdomains`),
+  reconciling on `active` (the only field that changes the served maps), so one reconcile
+  reads the whole desired state (subdomain map + both custom-domain maps). The dot ban +
+  per-VM cap stay on `Subdomain` (correct for wildcard labels) and do **not** apply here.
+- **`register_custom_domain(domain)` / `deregister_custom_domain(domain)`**: the full-FQDN
+  twins of `register`/`deregister` — same trust root (caller resolution by source `/128`),
+  same audit, same atomic arbitration (the `Custom Domain` unique key). `validate_custom_domain`
+  (`custom_domain_label.py`) requires a real FQDN **not** under the regional wildcard (a
+  wildcard-shadowing name belongs in the `register(label)` path). `register_custom_domain`
+  inserts `status=Active`: the domain enters **both** proxy maps immediately.
+- **Two maps, one fill-time (no readiness gate).** The custom-domain → VM map lives in
+  **both** proxy subsystems — a `:80` ACME-passthrough copy (http `acme_domains` dict) and
+  a `:443` SNI-passthrough copy (stream `domains` dict). They carry the **same** row set
+  (every active custom domain), differing only in value shape: the `:80` copy is the bare
+  bracketed v6 (so the VM can complete its first HTTP-01 issuance), the `:443` copy appends
+  `:443`. A domain is in both maps the moment it is registered — there is no readiness gate.
+  If the VM's cert isn't issued yet, the proxy forwards a TLS handshake the VM can't
+  complete (a transient client-side cert error that self-heals once the cert lands); pure
+  passthrough, no cross-tenant effect, so the gate's machinery isn't worth its cost.
+  `proxy.py` reconciles all three maps per proxy (subdomain `/sync`, SNI `SYNC-SNI` over
+  the stream-admin line protocol, ACME `/acme/sync`), each on its own byte-diff.
+- **Guest binary** (`bench-domain-provider`): `register`/`deregister` route a custom
+  (non-peeling) domain to `register_custom_domain`/`deregister_custom_domain` (was: declined
+  exit 2). The VM issues its own cert out-of-band (pilot's `setup-letsencrypt` over the
+  `:80` ACME route); Atlas does nothing on cert issuance — no confirm verb, no timer.
+- **Teardown** (Component F.1): `terminate()` deletes every `Custom Domain` for the VM, the
+  full-FQDN sibling of `_delete_subdomains`, so a custom-domain route never outlives its VM.
+
 ## Identity injected into the guest
 
 The **only** thing routing injects is the Atlas base URL, to `/etc/atlas-routing.env`
@@ -727,19 +772,6 @@ unauthenticated plain HTTP any tenant SSRF can read).
 - Multi-region cross-region suffix hardening (single-region today; the
   reconstruct-and-compare rule is specified now so it's correct when a second region
   lands).
-- **Custom (non-wildcard) external domains — Phase 2 (record recipe BUILT; routing/TLS
-  pending).** The **advisory record recipe is built**: `generate-dns-records` now answers a
-  custom domain with the controller's `dns_records(domain, site)` (Component K above) —
-  CNAME → the caller's reserved regional site, A+AAAA → the proxy fleet, CAA → the active
-  issuer. The user can already see what to add at their DNS provider. What remains unbuilt
-  is **routing the resulting traffic** end-to-end: `bench-domain-provider register` still
-  **declines** any name not under the regional wildcard (exit 2), so a custom domain has no
-  reservation yet, and the data path is gated on the explicitly-deferred
-  `ssl_certificate_by_lua` proxy SNI hook ([spec/09](./09-roadmap.md)): per-domain TLS (the
-  per-subdomain custom-domain cert spec/09 left "in place but unbuilt"), full-FQDN routing
-  in the proxy (`router.lua` strips the region suffix today), a Custom/Site Domain doctype
-  (the dot ban + cap are correct for wildcard labels), and an ownership-verification gate
-  before issuance. The contract for all of it already exists in pilot's verbs.
 - **Per-token whole-domain routing — a future billable tier.** Beyond the `*-{token}`
   suffix-match (one name → one VM, [vm-url-tokens](../llm/references/vm-url-tokens.md)),
   routing an **entire domain** `*.{token}.{region}.{domain}` to a single VM needs **one

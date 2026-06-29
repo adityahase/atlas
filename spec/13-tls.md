@@ -40,6 +40,57 @@ proxy fleet is the whole set of `Virtual Machine.is_proxy=1` rows (`proxy._proxy
 — issuance never needs to know which VMs are proxies, and there is no per-region
 filter to apply.
 
+## Custom domains: SNI passthrough, the VM holds the cert
+
+The flow above is for the **regional wildcard** (`*.<region>.frappe.dev`), which
+the proxy terminates. A **custom domain** — an FQDN the customer owns
+(`shop.acme.com`), routed to one site VM via the `Custom Domain` DocType
+([18-bench-self-routing.md](./18-bench-self-routing.md)) — does **not** terminate
+at the proxy and Atlas issues **no** cert for it. The proxy reads the SNI at L4
+(nginx `ssl_preread`, no decrypt) and forwards the **raw TLS stream** to the
+backend VM's `:443`; the **VM terminates TLS with its own Let's Encrypt cert**.
+There is no per-domain cert in the Atlas TLS layer, no `push_cert` for a custom
+domain, no `TLS Certificate` row — `Custom Domain.status` is informational only.
+
+**Why passthrough, not a second issuer.** The trust boundary is symmetric: each
+party terminates the TLS whose private key it owns. The proxy owns the wildcard
+key (DNS-01) and can't share it down — a VM holding it could impersonate every
+sibling subdomain. The VM owns its custom-domain key and won't share it up. So the
+proxy terminates wildcard subdomains and passes custom domains through; neither key
+crosses the boundary.
+
+**The VM self-issues over HTTP-01.** The site VM already runs an in-guest nginx
+that terminates `:443` with a real per-site SAN cert and serves ACME HTTP-01
+challenges from its own webroot (it is built to run standalone on an
+internet-facing VM). DNS-01 from the VM is rejected — it would need a
+certbot-supported DNS provider *and* the customer's DNS credentials in the guest,
+neither guaranteed. HTTP-01 only needs the challenge to reach the VM's `:80`.
+
+**The proxy forks :443 (SNI) and :80 (Host header)** — see
+[12-proxy.md § The stream front-door](./12-proxy.md#the-stream-front-door-sni-passthrough-for-custom-domains)
+for the topology. The one subtlety that lives in *this* layer: the proxy must
+answer `*.<region>.frappe.dev` ACME challenges **itself** (serve `:80`
+`/.well-known/acme-challenge/` locally for any host under the wildcard suffix) and
+passthrough ACME to the VM **only** for custom domains — so that no tenant VM can
+ever satisfy a challenge for the regional wildcard and have a CA issue it a
+`*.<region>.frappe.dev` cert. The wildcard-vs-custom test is the same host-suffix
+predicate the router uses.
+
+**No readiness gate — both maps fill on registration.** A custom domain enters
+**both** the proxy's `:80` ACME-passthrough map (so the VM can issue) and its
+`:443` SNI-passthrough map the moment it is registered. If the VM's cert isn't
+issued yet, a `:443` handshake is forwarded to a VM that can't complete it — the
+client sees a transient TLS cert error (wrong-cert / authority warning) that
+self-heals the moment the VM's cert lands. That is harmless: pure SNI passthrough,
+the proxy never decrypts and no other tenant is affected, so gating the `:443` map
+on a cert-confirmation signal isn't worth its machinery. (Pilot keeps on-script
+users off the domain until TLS is issued; an off-script user who points DNS early
+gets the transient error.) An SNI lookup miss is only an unknown / deregistered
+name. (See
+[llm/references/custom-domain-sni-passthrough.md](../llm/references/custom-domain-sni-passthrough.md)
+and [llm/references/drop-custom-domain-readiness-gate.md](../llm/references/drop-custom-domain-readiness-gate.md)
+for the full rationale.)
+
 ## Abstractions
 
 Two registries under `atlas/atlas/`, each modeled on `atlas/atlas/providers/`:

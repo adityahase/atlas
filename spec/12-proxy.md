@@ -26,6 +26,56 @@ source of truth and reconciles each proxy's live map over SSH.
   source of truth), dumped to a sorted, pretty-printed `map.json` read only at
   start. A map change is an atomic dict write — **zero reload**.
 
+## The stream front-door: SNI passthrough for custom domains
+
+Two kinds of name reach `:443`, and they terminate in two different places:
+
+- A **regional-wildcard subdomain** (`app.<region>.frappe.dev`) terminates **at
+  the proxy** under the wildcard cert, then proxies cleartext HTTP to the VM's
+  `:80` — the path the rest of this doc describes.
+- A **custom domain** (`shop.acme.com`, a `Custom Domain` row,
+  [18-bench-self-routing.md](./18-bench-self-routing.md)) is **passed through**:
+  the proxy reads the SNI at L4 and forwards the raw TLS stream to the VM's `:443`,
+  which terminates with its **own** Let's Encrypt cert. The proxy holds no
+  custom-domain key. The trust boundary and the VM-self-issue rationale live in
+  [13-tls.md § Custom domains](./13-tls.md#custom-domains-sni-passthrough-the-vm-holds-the-cert).
+
+Because the customer points DNS at the proxy for both, one `nginx` process forks
+both public ports:
+
+```
+:443  stream{}  — SNI fork (ssl_preread, no decrypt):
+        SNI under *.<region>.<domain>  -> 127.0.0.1:8443  (local http{} terminator, the L7 path below)
+        SNI is a known custom domain   -> [vm_v6]:443      (raw passthrough; VM terminates)
+        miss                           -> drop             (unknown / deregistered name, 13-tls.md)
+
+:80   http{}   — Host-header fork (cleartext, no SNI):
+        acme-challenge + Host under wildcard  -> serve LOCALLY  (no VM may answer a *.<region> challenge)
+        acme-challenge + Host is custom        -> [vm_v6]:80     (VM completes its own HTTP-01)
+        everything else                        -> 308 -> https   (unchanged)
+```
+
+The `stream{}` subsystem moves to the **front** and owns `[::]:443` + the
+reserved-v4 `:443` (it already owns the `10000-19999` L4 pool,
+[17-tcp-proxy.md](./17-tcp-proxy.md), so this is its second listener kind). The
+existing `http{}` `:443` server block — `router.lua`, the wildcard cert, every L7
+header/timeout — is **unchanged except its listen address**: it becomes
+`listen 127.0.0.1:8443 ssl proxy_protocol`, fed by the stream front-door for
+wildcard SNIs, with `set_real_ip_from 127.0.0.1` + `real_ip_header proxy_protocol`
+so the tenant still sees the true client IP across the loopback hop. **TLS is
+terminated once** (at 8443), never twice — `ssl_preread` only peeks at the
+ClientHello SNI; the loopback hop carries encrypted bytes.
+
+The custom-domain → VM `/128` map lives in a **separate** `lua_shared_dict` from
+the wildcard `sites` map (full host as key, not bare label), and is needed in
+**both** subsystems (http for `:80` ACME, stream for `:443`) — cross-subsystem
+dict sharing is unimplemented, so each holds its own copy written on the same
+reconcile. Both copies carry the same row set (every active custom domain),
+differing only in value shape (the `:80` copy is the bare bracketed v6, the `:443`
+copy appends `:443`); both fill on registration — there is no readiness gate; see
+[13-tls.md](./13-tls.md) and
+[llm/references/custom-domain-sni-passthrough.md](../llm/references/custom-domain-sni-passthrough.md).
+
 ## Desired state: the Subdomain DocType
 
 One [`Subdomain`](./02-doctypes.md#subdomain) row per routing entry: `subdomain`
@@ -68,8 +118,10 @@ and the socket's file permissions are the gate.
   stdin, never in an argv) and reload nginx. Cert pushes are rare, so a reload is
   fine here (unlike map changes). The cert is pushed, never baked into the image,
   so one proxy image serves any region and a renewal is a re-push, not a rebuild.
-  The per-region cert-dir layout is kept deliberately so a future customer-domain
-  feature can serve more than one cert per proxy.
+  The per-region cert-dir layout is kept for region-portability (one image, any
+  region) — **not** to serve multiple certs per proxy: custom domains are SNI
+  passthrough (the VM holds their cert, *The stream front-door* above), so the
+  wildcard is the only cert a proxy ever holds.
 
 - **`build_proxy(vm)`** — turn a freshly-provisioned Ubuntu guest into a proxy:
   upload the committed [`proxy/`](../proxy) tree over the same guest-SSH path and

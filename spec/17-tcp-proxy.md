@@ -75,6 +75,16 @@ bumping the nginx version.
   block, dumped to `stream-map.json`, read only at start. A change is an atomic
   dict write — **zero reload**, exactly like the HTTP `sites` dict.
 
+> **The `stream{}` block has a second listener kind now.** Custom-domain SNI
+> passthrough ([18-bench-self-routing.md § Component L](./18-bench-self-routing.md),
+> [12-proxy.md § The stream front-door](./12-proxy.md#the-stream-front-door-sni-passthrough-for-custom-domains))
+> adds a `:443` `ssl_preread` front-door server (+ a loopback `:8445` strip-path) and a
+> `domains` `lua_shared_dict` alongside the L4 port pool described here. It reuses this
+> chapter's machinery — the same stream-admin unix socket (new `-SNI` verbs), the same
+> canonical-JSON persist pattern, the same zero-reload dict writes — so the two listener
+> kinds (the `10000-19999` raw-TCP pool and the `:443` SNI fork) coexist in one
+> `stream{}` block. Both count against `worker_connections` above.
+
 ## Desired state: the Port Mapping DocType
 
 One [`Port Mapping`](./02-doctypes.md#port-mapping) row per exposed port,
