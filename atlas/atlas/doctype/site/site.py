@@ -271,18 +271,14 @@ def auto_provision(site_name: str) -> None:
 	site = frappe.get_doc("Site", site_name)
 	if site.status != "Pending":
 		return
-	# Developer-mode short-circuit: a laptop has no Firecracker/KVM host, so the
-	# real clone→boot→deploy→HTTP chain can't complete (the Fake provider's VMs
-	# carry documentation IPs that never serve). In developer_mode we skip straight
-	# to the tenant handoff — stamp the shared baked Administrator password and mark
-	# the site Running — so the Central self-serve flow is testable end-to-end
-	# locally. The same `_set_status` path the real flow uses, so Central's
-	# `site.status_changed` event + `get_site` poll see Running identically. Never
-	# fires in production (developer_mode off).
-	if frappe.conf.developer_mode:
-		site.db_set("admin_password", BAKED_ADMIN_PASSWORD)
-		_set_status(site, "Running")
-		return
+	# A Fake-backed site (developer_mode laptop) runs this WHOLE flow for real —
+	# clone the backing VM, wait for it to boot, create the Subdomain, mark Running —
+	# so every record a production provision creates is created here too (the old
+	# short-circuit stamped Running and skipped them, leaving an un-routable Site with
+	# no VM and no Subdomain). Only the two stages that physically can't run against a
+	# Fake VM's documentation IP — the SSH deploy and the HTTP readiness probe —
+	# short-circuit, inside `_deploy_site`/`_wait_for_http`, the same `is_fake_server`
+	# gate `run_task` uses. Never fires in production (no Fake servers there).
 	# Per-stage wall-clock trace, printed to the job log (and the bench `worker`
 	# console) so the whole provision can be followed live and the slow stage
 	# pinpointed — `_stage` logs the prior stage's duration as the next begins.
@@ -455,9 +451,17 @@ def _deploy_site(site, vm_name: str) -> None:
 	(the multitenant gunicorn resolves the site by Host header per request, so the
 	rename + reload serve it live). Confirms it answers on :80 before returning.
 
-	Seam for the in-guest deploy script + its guest-SSH driver."""
+	Seam for the in-guest deploy script + its guest-SSH driver. A Fake-backed VM
+	carries a documentation IP that never answers SSH, so the deploy is a no-op
+	there — the same `is_fake_server` gate `run_task` uses (atlas.atlas._ssh.runner).
+	The baked site already serves on the (synthetic) guest in the fiction the Fake
+	provider maintains, so there is nothing to rename."""
 	from atlas.atlas.deploy_site import deploy_site
+	from atlas.atlas.providers.fake_tasks import is_fake_server
 
+	vm = frappe.get_doc("Virtual Machine", vm_name)
+	if is_fake_server(vm.server):
+		return
 	deploy_site(vm_name, site.name)
 
 
@@ -470,10 +474,17 @@ def _wait_for_http(site, vm_name: str) -> None:
 	routes the probe to THIS site, not just any site on the VM. The readiness PATH is
 	mode-aware: `/api/method/ping` for a site-mode clone, `/api/status` for an
 	admin-mode clone (the admin console is a Flask app with no Frappe ping route) —
-	resolved from the clone's `build_mode`."""
+	resolved from the clone's `build_mode`.
+
+	A Fake-backed VM's documentation /128 never answers, so the probe is skipped
+	there (the same `is_fake_server` gate `_deploy_site` and `run_task` use) — the
+	readiness gate is the deploy's twin, both no-ops on a Fake VM."""
 	from atlas.atlas.deploy_site import readiness_path_for_mode, wait_for_http
+	from atlas.atlas.providers.fake_tasks import is_fake_server
 
 	vm = frappe.get_doc("Virtual Machine", vm_name)
+	if is_fake_server(vm.server):
+		return
 	wait_for_http(vm.ipv6_address, site.name, path=readiness_path_for_mode(vm.build_mode))
 
 

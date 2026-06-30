@@ -350,6 +350,67 @@ class TestSiteOrchestration(IntegrationTestCase):
 		self.assertEqual(subdomain.virtual_machine, vm.name)
 
 
+class TestSiteFakeProvisionStages(IntegrationTestCase):
+	"""The deploy + HTTP-probe stages short-circuit on a Fake-backed VM (the same
+	`is_fake_server` gate `run_task` uses). A Fake VM carries a documentation IP that
+	never answers SSH or HTTP, so without this the real flow times out and the Site is
+	left Failed with no Subdomain — the whole point is that a developer_mode/Fake
+	auto_provision still creates EVERY record a real one does, only skipping the two
+	stages that physically can't run. A real (non-Fake) VM still calls through."""
+
+	def setUp(self) -> None:
+		_ensure_root_domain()
+		from atlas.tests.fixtures import make_image, make_provider_row, make_server, make_virtual_machine
+
+		for name in frappe.get_all("Site", pluck="name"):
+			frappe.delete_doc("Site", name, force=1, ignore_permissions=True)
+		for name in frappe.get_all("Subdomain", pluck="name"):
+			frappe.delete_doc("Subdomain", name, force=1, ignore_permissions=True)
+		image = make_image("fake-stage-image")
+		fake_server = make_server(
+			make_provider_row("fake-stage-provider", provider_type="Fake"),
+			title="fake-stage-server",
+			provider_type="Fake",
+			status="Active",
+		)
+		self.fake_vm = make_virtual_machine(
+			fake_server, image, title="fake-stage-vm", ipv6_address="2001:db8:f::1"
+		)
+		real_server = make_server(title="real-stage-server", ipv6_address="2001:db8:9::1")
+		self.real_vm = make_virtual_machine(
+			real_server, image, title="real-stage-vm", ipv6_address="2001:db8:9::5"
+		)
+		self.site = _new_site("acme")
+
+	def test_deploy_site_noops_on_fake_vm(self) -> None:
+		from atlas.atlas import deploy_site as deploy_module
+
+		with patch.object(deploy_module, "deploy_site") as m_deploy:
+			site_module._deploy_site(self.site, self.fake_vm.name)
+		m_deploy.assert_not_called()
+
+	def test_wait_for_http_noops_on_fake_vm(self) -> None:
+		from atlas.atlas import deploy_site as deploy_module
+
+		with patch.object(deploy_module, "wait_for_http") as m_http:
+			site_module._wait_for_http(self.site, self.fake_vm.name)
+		m_http.assert_not_called()
+
+	def test_deploy_site_calls_through_on_real_vm(self) -> None:
+		from atlas.atlas import deploy_site as deploy_module
+
+		with patch.object(deploy_module, "deploy_site") as m_deploy:
+			site_module._deploy_site(self.site, self.real_vm.name)
+		m_deploy.assert_called_once_with(self.real_vm.name, self.site.name)
+
+	def test_wait_for_http_calls_through_on_real_vm(self) -> None:
+		from atlas.atlas import deploy_site as deploy_module
+
+		with patch.object(deploy_module, "wait_for_http") as m_http:
+			site_module._wait_for_http(self.site, self.real_vm.name)
+		m_http.assert_called_once()
+
+
 class TestSiteWarmFirstProvision(IntegrationTestCase):
 	"""The warm-first backing-VM selection (spec/14-self-serve.md § Warm-first
 	provisioning). `_provision_backing_vm` resolves the cold golden, then — when
