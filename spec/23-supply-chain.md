@@ -81,14 +81,19 @@ one tarball — but both are recorded on the `Server` row.)
 
 Built from source **inside the proxy guest** by
 [`proxy/build.sh`](../proxy/build.sh), driven by `atlas.atlas.proxy.build_proxy`.
-The nginx **base binary** comes from the signed `nginx.org` apt repo; the
-**dynamic modules** (which ship in no apt repo) are compiled against matching
-source. See [12-proxy.md](./12-proxy.md) and [17-tcp-proxy.md](./17-tcp-proxy.md).
+The nginx **base** (OpenSSL, deps, stock layout) comes from the signed
+`nginx.org` apt repo, but the **binary itself is a same-version (1.30.3) recompile
+from source** carrying the OpenResty `stream_ssl_preread_no_skip` core patch
+(load-bearing for the `:443` SNI front-door — [12-proxy.md § Why these decisions
+#7](./12-proxy.md)); the **dynamic modules** (which ship in no apt repo) are
+compiled against that same source. See [12-proxy.md](./12-proxy.md) and
+[17-tcp-proxy.md](./17-tcp-proxy.md).
 
 | Artefact | Version | Source | Checksum? |
 | --- | --- | --- | --- |
-| nginx (base binary + OpenSSL) | `1.30.3` (`-1~<codename>`) | `nginx.org` apt repo (signed) | apt signature chain |
-| nginx source (for `make modules`) | `1.30.3` | `nginx.org/download` | **No** |
+| nginx (apt base: OpenSSL/deps/layout) | `1.30.3` (`-1~<codename>`) | `nginx.org` apt repo (signed) | apt signature chain |
+| nginx source (patched binary recompile + modules) | `1.30.3` | `nginx.org/download` | **No** |
+| `stream_ssl_preread_no_skip` patch | for `1.30.3` | OpenResty (`proxy/patches/`, vendored) | committed in-tree |
 | OpenResty `luajit2` | `v2.1-20250529` | `github.com/openresty/luajit2` | **No** |
 | `ngx_devel_kit` (NDK) | `0.3.4` | `github.com/vision5/ngx_devel_kit` | **No** |
 | `lua-nginx-module` | `0.10.29` | `github.com/openresty/lua-nginx-module` | **No** |
