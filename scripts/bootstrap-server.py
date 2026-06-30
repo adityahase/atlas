@@ -68,6 +68,8 @@ net.ipv6.conf.default.accept_ra = 0
 
 # --- sshd hardening drop-in, verbatim (step 5) ---
 SSHD_CONF = """\
+# Port 22 is for public ssh into firecracker vms via sshpiperd
+Port 222
 # 5.1.20 key-only root (NOT `no`: Atlas operates as root, no unpriv user yet)
 PermitRootLogin prohibit-password
 # turn "we happen to use keys" into "the server refuses anything else"
@@ -182,13 +184,18 @@ class BootstrapInputs(TaskInputs):
 	"""Turn a fresh Ubuntu 24.04 host into a Firecracker host (idempotent)."""
 
 	command: typing.ClassVar[str] = "bootstrap-server"
+	sshpiper_version: str  # e.g. v1.15.1
 	firecracker_version: str  # e.g. v1.16.0
 	architecture: str  # e.g. x86_64 (must match `uname -m`)
+	atlas_url: str
+	sshpiper_lookup_server: str
+	sshpiper_api_key: str
 
 
 @dataclass(frozen=True)
 class BootstrapResult(TaskResult):
 	firecracker_version: str
+	sshpiper_version: str
 	jailer_version: str
 	kernel_version: str
 	architecture: str
@@ -270,6 +277,33 @@ def _install_firecracker(version: str, architecture: str) -> None:
 	)
 	run("sudo rm -rf /tmp/firecracker-install")
 
+def _install_sshpiper(version: str, architecture: str) -> None:
+	installed_sshpiper = _binary_version("/usr/local/bin/sshpiperd")
+	# TODO: Setup a better way to download plugin
+	#installed_plugin = _binary_version("/usr/local/bin/sshpiperd_atlas")
+	# TODO: sshpiper's version output is pretty verbose (and sometimes version is in line 2), gotta fix this
+	#wanted_version = version.lstrip("v")
+	#if installed_firecracker == wanted_version and installed_jailer == wanted_version:
+	#	return
+
+	release = f"release-{version}-{architecture}"
+	url = (
+		f"https://github.com/tg123/sshpiper/releases/download/"
+		f"{version}/sshpiperd_with_plugins_linux_{architecture}.tar.gz"
+	)
+	run("sudo", "rm", "-rf", "/tmp/sshpiper-install")
+	run("mkdir", "/tmp/sshpiper-install")
+	# curl … | tar -xz, run from the install dir.
+	run("sudo", "sh", "-c", f"cd /tmp/sshpiper-install && curl -fsSL {url!r} | tar -xz")
+	run(
+		"sudo",
+		"install",
+		"-m",
+		"0755",
+		f"/tmp/sshpiper-install/sshpiperd",
+		"/usr/local/bin/sshpiperd",
+	)
+	run("sudo", "rm", "-rf", "/tmp/sshpiper-install")
 
 def main() -> None:
 	inputs = BootstrapInputs.from_args()
@@ -302,8 +336,19 @@ def main() -> None:
 	packages = _substitute(" ".join("{}" for _ in PACKAGES), tuple(PACKAGES))
 	run("sudo apt-get -o DPkg::Lock::Timeout=300 install -y " + packages)
 
-	# 3. Install Firecracker + jailer (version-gated).
+	# 3A Install Firecracker + jailer (version-gated).
 	_install_firecracker(inputs.firecracker_version, inputs.architecture)
+
+	# 3B Install SSHPiper + Plugin (version-gated).
+	_install_sshpiper(inputs.sshpiper_version, inputs.architecture)
+	sshpiper_envvars = (
+		f'ATLAS_URL="{inputs.atlas_url}"\n'
+		f'SSHPIPER_LOOKUP_SERVER="{inputs.sshpiper_lookup_server}"\n'
+		f'SSHPIPER_API_KEY="{inputs.sshpiper_api_key}"\n'
+	)
+	install_file(sshpiper_envvars, "/etc/default/sshpiper", mode="0600")
+	run("sudo", "install", "-m", "0755", "-o", "root", "-g", "root", "/tmp/sshpiper-atlas", "/usr/local/bin/sshpiper-atlas")
+	run("sudo", "systemctl", "enable", "--now", "sshpiper.service", check=False, quiet=True)
 
 	# 4. Kernel/network sysctls: VM-networking essentials + CIS 3.3 hardening.
 	#    The forwarding + proxy_ndp lines are LOAD-BEARING for the routed-tap VM
@@ -458,6 +503,9 @@ def main() -> None:
 	ThinPool().ensure()
 	run("sudo systemctl enable atlas-pool.service", check=False, quiet=True)
 
+	# Generate root ssh key for use by sshpiper
+	run("sudo", "bash", "-c", "[ -e '/root/.ssh/id_ed25519' ] || ssh-keygen -t ed25519 -f '/root/.ssh/id_ed25519' -q -N ''")
+
 	# 12. Record state for Atlas to pick up. Single JSON file is the canonical
 	#     source of truth. The bytes still land in /var/lib/atlas/bootstrap.json;
 	#     BootstrapResult.emit() carries the same values on stdout as the typed
@@ -465,6 +513,7 @@ def main() -> None:
 	result = BootstrapResult(
 		firecracker_version=_binary_version("/usr/local/bin/firecracker"),
 		jailer_version=_binary_version("/usr/local/bin/jailer"),
+		sshpiper_version=_binary_version("/usr/local/bin/sshpiperd"),
 		kernel_version=_uname("-r"),
 		architecture=_uname("-m"),
 		python_version=python_version,

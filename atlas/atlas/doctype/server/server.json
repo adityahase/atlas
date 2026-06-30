@@ -31,7 +31,8 @@
   "kernel_version",
   "cli_ready",
   "section_break_metadata",
-  "provider_metadata"
+  "provider_metadata",
+  "sshpiper_api_key"
  ],
  "fields": [
   {
@@ -191,6 +192,13 @@
    "label": "Provider Metadata",
    "options": "JSON",
    "read_only": 1
+  },
+  {
+   "fieldname": "sshpiper_api_key",
+   "fieldtype": "Password",
+   "hidden": 1,
+   "label": "SSHPiper API Key",
+   "no_copy": 1
   }
  ],
  "links": [],
