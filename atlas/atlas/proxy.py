@@ -102,6 +102,43 @@ def _desired_maps() -> dict[str, str]:
 	}
 
 
+def read_live_maps(virtual_machine: str) -> dict:
+	"""Read all three of a proxy guest's live maps in one SSH session and return them
+	alongside the desired maps + a per-map drift flag — the read-only twin of
+	_reconcile_proxy (same three reads, no writes). Powers the Desk "Live proxy maps"
+	button: an operator can see, without mutating anything, exactly what the proxy is
+	serving (the `no host in upstream ""` class of bug is a live-vs-desired drift, and
+	this surfaces it directly).
+
+	Returns, per map (`sites` / `sni` / `acme`):
+	    {"live": <parsed dict>, "desired": <parsed dict>, "in_sync": bool}
+	The live read uses the SAME guest-side reads the reconcile uses, so `in_sync` is the
+	same byte compare reconcile makes before deciding to sync. A read failure raises —
+	a button that silently showed an empty map would lie about what the proxy serves."""
+	desired = _desired_maps()
+	reads = {
+		"sites": _curl_command("GET", "/map"),
+		"sni": f"{STREAM_ADMIN_BIN} GET-SNI",
+		"acme": _curl_command("GET", "/acme"),
+	}
+	vm = frappe.get_doc("Virtual Machine", virtual_machine)
+	connection = connection_for_guest(vm)
+	out: dict = {}
+	with ssh_key_file(connection.ssh_private_key) as key_path:
+		for key, command in reads.items():
+			live_json, stderr, code = run_ssh(connection, key_path, command, timeout_seconds=60)
+			if code != 0:
+				frappe.throw(
+					f"Reading the {key} map from {virtual_machine} failed (exit {code}): {stderr[-300:]}"
+				)
+			out[key] = {
+				"live": json.loads(live_json),
+				"desired": json.loads(desired[key]),
+				"in_sync": live_json == desired[key],
+			}
+	return out
+
+
 def _reconcile_proxy(virtual_machine: str, desired: dict[str, str]) -> bool:
 	"""Reconcile all three maps on one proxy in a single SSH session reuse (one key
 	file). Each map is read-then-synced independently (read live, byte-compare, sync on

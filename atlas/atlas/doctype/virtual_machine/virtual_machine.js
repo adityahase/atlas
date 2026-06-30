@@ -118,7 +118,94 @@ function add_lifecycle_buttons(frm) {
 			})
 		);
 	}
+	if (frm.doc.is_proxy && status !== "Terminated") {
+		// Read-only: pull the proxy's three live maps (sites / sni / acme) straight
+		// off its admin sockets and show them against the desired maps, flagging
+		// drift. The first thing to check when a site 404s / resets at the proxy.
+		frappe.atlas.add_action(frm, "Live proxy maps", () => show_proxy_maps(frm));
+	}
 	frappe.atlas.add_danger(frm, "Terminate", () => confirm_terminate(frm));
+}
+
+// The three maps a proxy serves, in the order they matter for debugging a route.
+const PROXY_MAP_LABELS = {
+	sites: __("Wildcard subdomains (sites)"),
+	sni: __("Custom-domain SNI (:443)"),
+	acme: __("Custom-domain ACME (:80)"),
+};
+
+function show_proxy_maps(frm) {
+	// Let frm.call own the freeze overlay (freeze + freeze_message) so it clears
+	// itself when the call settles. A manual frappe.dom.freeze() here stacks a
+	// second ref on the same counter that only unfreeze in .finally() would clear —
+	// and the ordering against the call's own unfreeze leaves the overlay stuck on
+	// top of the rendered dialog (the "frozen, then renders wrong" symptom).
+	frm.call({
+		method: "read_proxy_maps",
+		doc: frm.doc,
+		freeze: true,
+		freeze_message: __("Reading live maps from the proxy…"),
+	}).then(({ message }) => {
+		if (message) render_proxy_maps_dialog(frm, message);
+	});
+}
+
+function render_proxy_maps_dialog(frm, maps) {
+	const sections = Object.keys(PROXY_MAP_LABELS).map((key) => {
+		const map = maps[key] || { live: {}, desired: {}, in_sync: true };
+		const badge = map.in_sync
+			? `<span class="indicator-pill green">${__("in sync")}</span>`
+			: `<span class="indicator-pill red">${__("DRIFTED")}</span>`;
+		return `
+			<div style="margin-bottom: 1.5rem;">
+				<h5 style="margin-bottom: .5rem;">${PROXY_MAP_LABELS[key]} ${badge}</h5>
+				${proxy_map_table(map)}
+			</div>`;
+	});
+	const dialog = new frappe.ui.Dialog({
+		title: __("Live proxy maps — {0}", [frm.doc.title || frm.doc.name.slice(0, 8)]),
+		size: "large",
+		fields: [{ fieldtype: "HTML", fieldname: "maps", options: sections.join("") }],
+		primary_action_label: __("Refresh"),
+		primary_action() {
+			dialog.hide();
+			show_proxy_maps(frm);
+		},
+	});
+	dialog.show();
+}
+
+function proxy_map_table(map) {
+	// Union of live + desired keys so a key present in one but not the other is
+	// visible (that IS the drift). A live value that differs from desired is
+	// highlighted, as is a key missing from either side.
+	const keys = Array.from(
+		new Set([...Object.keys(map.live || {}), ...Object.keys(map.desired || {})])
+	).sort();
+	if (!keys.length) {
+		return `<p class="text-muted small">${__("Empty.")}</p>`;
+	}
+	const esc = frappe.utils.escape_html;
+	const rows = keys
+		.map((k) => {
+			const live = map.live?.[k] ?? "";
+			const desired = map.desired?.[k] ?? "";
+			const drift = live !== desired;
+			const style = drift ? ' style="background: var(--red-50);"' : "";
+			return `<tr${style}>
+				<td><code>${esc(k)}</code></td>
+				<td><code>${esc(String(live)) || "—"}</code></td>
+				<td><code>${esc(String(desired)) || "—"}</code></td>
+			</tr>`;
+		})
+		.join("");
+	return `
+		<table class="table table-bordered table-sm small" style="margin-bottom: 0;">
+			<thead><tr>
+				<th>${__("Key")}</th><th>${__("Live (on proxy)")}</th><th>${__("Desired")}</th>
+			</tr></thead>
+			<tbody>${rows}</tbody>
+		</table>`;
 }
 
 function add_terminated_actions(frm) {

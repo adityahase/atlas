@@ -715,6 +715,17 @@ class VirtualMachine(Document):
 		return task.name
 
 	@frappe.whitelist()
+	def read_proxy_maps(self) -> dict:
+		"""Return this proxy's three live maps (sites / sni / acme) alongside the
+		desired maps and a per-map drift flag — read-only. Proxy-only: a non-proxy VM
+		has no admin sockets to read."""
+		if not self.is_proxy:
+			frappe.throw(f"{self.name} is not a proxy (is_proxy unset)")
+		from atlas.atlas import proxy
+
+		return proxy.read_live_maps(self.name)
+
+	@frappe.whitelist()
 	def terminate(self) -> str:
 		if self.status == "Terminated":
 			frappe.throw(_("VM is already terminated"))
