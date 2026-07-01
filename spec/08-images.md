@@ -338,10 +338,10 @@ service. Atlas never touches MariaDB auth — bench-cli secures it.
 (a preallocated **file vdev**, since the build VM is single-disk) and mounts it,
 so BOTH the bench code and the MariaDB data live on ZFS. At the pinned bench-cli the mere presence of a `[volume]` table enables ZFS.
 The Firecracker `vmlinux` ships no ZFS module, so the **one** ZFS thing `build.sh`
-does itself is DKMS-build `zfs.ko` against the running kernel (`zfs-dkms` +
-`linux-headers-$(uname -r)` + `modprobe zfs`); the built `.ko` travels in the
-snapshot. (Cold-boot ZFS auto-import/mount-ordering is not yet wired — to be
-verified on a host.)
+does itself is install Ubuntu's prebuilt `zfs.ko` from `linux-modules-extra-$(uname -r)`
+(matched to the byte-pinned noble kernel, so no DKMS compile or `linux-headers`)
+and `modprobe zfs`; the module travels in the snapshot. (Cold-boot ZFS
+auto-import/mount-ordering is not yet wired — to be verified on a host.)
 
 The golden image is a **`Virtual Machine Snapshot`, not a from-URL
 `Virtual Machine Image`** — it is built *inside* a VM and snapshotted, the same
@@ -350,8 +350,8 @@ build-in-guest pattern the proxy uses ([12-proxy.md](./12-proxy.md)):
 1. Provision a plain `ubuntu-24.04` VM on a server in the region.
 2. `atlas.atlas.bench_image.build_bench(<vm>)` uploads the committed
    [`bench/`](../bench/) tree and runs `bench/build.sh` over guest-SSH — the
-   sibling of `proxy.build_proxy`. `build.sh` fixes setuid bits, DKMS-installs the
-   ZFS module, runs bench-cli's `install.sh` (at a pinned commit) as root — which
+   sibling of `proxy.build_proxy`. `build.sh` fixes setuid bits, installs the
+   prebuilt ZFS module, runs bench-cli's `install.sh` (at a pinned commit) as root — which
    creates the `frappe` user + sudoers — then again as `frappe` to install bench-cli,
    drops the committed [`bench/bench.toml`](../bench/bench.toml), and runs
    `bench init` + `bench start` as `frappe`. `bench init` is the heavy,

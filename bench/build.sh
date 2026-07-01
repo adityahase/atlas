@@ -117,13 +117,16 @@ chmod u+s /usr/bin/sudo /usr/bin/passwd /usr/bin/su /bin/su \
 # --- 2. Install the ZFS kernel module (bench-setup.md §2). The Firecracker
 # vmlinux ships NO builtin ZFS and NO /lib/modules, so `zfsutils-linux`
 # (userspace) alone leaves `modprobe zfs` FATAL — which would abort init's ZFS
-# volume step ([volume].enabled = true). DKMS-build zfs.ko against the running
-# kernel (the matching linux-headers package IS in noble-updates and the vmlinux
-# loads externally-built modules) and load it. This is the ONE ZFS thing build.sh
-# does — bench-cli's VolumeManager handles the pool/datasets itself. ---
+# volume step ([volume].enabled = true). Ubuntu ships a PREBUILT zfs.ko in
+# `linux-modules-extra-$(uname -r)`, matched to the exact kernel the noble
+# vmlinux blob boots — so we install that instead of DKMS-compiling zfs.ko every
+# bake (DKMS pulls a full toolchain + linux-headers and burns minutes of CPU).
+# The kernel is byte-pinned by the dated cloud-image release, so its vermagic
+# never drifts out from under the prebuilt module. This is the ONE ZFS thing
+# build.sh does — bench-cli's VolumeManager handles the pool/datasets itself. ---
 apt-get update
 apt-get install -y --no-install-recommends \
-	dkms zfsutils-linux zfs-dkms "linux-headers-$(uname -r)"
+	zfsutils-linux "linux-modules-extra-$(uname -r)"
 modprobe zfs
 
 # --- 3. Install bench-cli — install.sh creates the bench user too (bench-setup.md
