@@ -493,6 +493,14 @@ def _firecracker_config(inputs: "ProvisionInputs") -> str:
 			"version": "V1",
 			"network_interfaces": ["eth0"],
 		},
+		# virtio-rng: feed the guest kernel a hardware RNG so it seeds its CSPRNG
+		# from the host's AWS-LC entropy. Ubuntu ships CONFIG_HW_RANDOM_VIRTIO=m, so
+		# the driver isn't in the extracted vmlinux — sync-image.py bakes the
+		# virtio_rng module into the rootfs and pins it in modules-load.d, and only
+		# then does the device bind (/dev/hwrng). No rate_limiter — entropy is cheap
+		# and we want it as fast as the guest asks. Like mmds-config, it must be in
+		# the GOLDEN's boot config so the captured vmstate carries the device.
+		"entropy": {},
 	}
 	# The data disk is a second, non-root drive (the guest's /dev/vdb), resolved
 	# post-chroot to the data.ext4 block node exposed in step 4c. Only when the VM
