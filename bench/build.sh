@@ -122,7 +122,13 @@ chmod u+s /usr/bin/sudo /usr/bin/passwd /usr/bin/su /bin/su \
 # install only `zfsutils-linux` (zpool/zfs binaries), which bench-cli's VolumeManager
 # needs to build the pool/datasets. This is the ONE ZFS thing build.sh does. ---
 apt-get update
-apt-get install -y --no-install-recommends zfsutils-linux
+# `git` is bench-cli's own bootstrap dependency: install.sh (below) clones bench-cli
+# with git, and bench pulls/updates apps over git at runtime. The standard Ubuntu base
+# ships it, but the minimal base drops it to shrink the runtime surface — so install it
+# here rather than assume the base carries it. It lands in the golden bench snapshot
+# (a superset of the base), not the base image. Without it the bake dies at install.sh
+# `Cloning bench-cli` with `git: command not found` (exit 127).
+apt-get install -y --no-install-recommends zfsutils-linux git
 
 # --- 3. Install bench-cli — install.sh creates the bench user too (bench-setup.md
 # §3+§4). install.sh has two paths (bench-cli @ 03a4272 install.sh): run AS ROOT it
