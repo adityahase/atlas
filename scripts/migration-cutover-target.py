@@ -34,15 +34,17 @@ class CutoverInputs(TaskInputs):
 	command: typing.ClassVar[str] = "migration-cutover-target"
 	virtual_machine_name: str
 	data_disk_gb: int = 0
+	nbd_base_slot: int = 0  # must match clone-target's, so we free the RIGHT nbd devices
 
 
 def main() -> None:
 	inputs = CutoverInputs.from_args()
 	uuid = inputs.virtual_machine_name
 
-	keys = [(uuid, 0)]
+	# root = base+0, data = base+1 — the same per-VM block clone-target attached.
+	keys = [(uuid, inputs.nbd_base_slot)]
 	if inputs.data_disk_gb > 0:
-		keys.append((uuid + "-data", 1))
+		keys.append((uuid + "-data", inputs.nbd_base_slot + 1))
 
 	for key, nbd_slot in keys:
 		_collapse(key, nbd_slot)

@@ -24,6 +24,9 @@
 #   data_disk_gb          - data disk size, 0 if none
 #   source_host           - source server public IPv4 (plain-TCP NBD target)
 #   nbd_port              - source NBD port (data disk served on nbd_port+1)
+#   nbd_base_slot         - first of this VM's contiguous nbd CLIENT devices on the
+#                           target (root = base+0, data = base+1). Per-VM so two
+#                           migrations to one target never share an nbd device.
 
 import os
 import sys
@@ -53,6 +56,7 @@ class CloneInputs(TaskInputs):
 	source_host: str
 	nbd_port: int
 	data_disk_gb: int = 0
+	nbd_base_slot: int = 0
 	phase: str = "prepare"  # only "prepare" in stage 1
 
 
@@ -96,10 +100,12 @@ def main() -> None:
 		pool.create_thin(data_dest, inputs.data_disk_gb)
 
 	# 4. nbd clients straight to the source over plain TCP (no tunnel this stage).
-	root_nbd = _ensure_nbd_client(inputs.source_host, inputs.nbd_port, slot=0)
+	#    Per-VM slot block on the target: root = base+0, data = base+1, so two
+	#    migrations to one target never share an nbd device.
+	root_nbd = _ensure_nbd_client(inputs.source_host, inputs.nbd_port, slot=inputs.nbd_base_slot)
 	data_nbd = None
 	if data_dest is not None:
-		data_nbd = _ensure_nbd_client(inputs.source_host, inputs.nbd_port + 1, slot=1)
+		data_nbd = _ensure_nbd_client(inputs.source_host, inputs.nbd_port + 1, slot=inputs.nbd_base_slot + 1)
 
 	# 5. dm-clone device(s). Idempotent: skip if the mapper device already exists.
 	_ensure_dm_clone(pool, uuid, dest, root_nbd)

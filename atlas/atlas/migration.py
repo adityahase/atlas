@@ -331,6 +331,10 @@ def _phase_target_preparing(doc) -> bool:
 			"DATA_DISK_GB": str(_target_disk_gb(doc, "data_disk_gigabytes", doc.data_disk_bytes)),
 			"SOURCE_HOST": _server_ipv4(doc.source_server),
 			"NBD_PORT": str(doc.nbd_port),
+			# Per-VM nbd device block on the target: root = base+0, data = base+1
+			# (base+2/+3 belong to the base-image ship). Keeps concurrent migrations
+			# to one target off each other's nbd devices.
+			"NBD_BASE_SLOT": str(nbd_base_slot(doc.virtual_machine)),
 			"PHASE": "prepare",
 		},
 		timeout_seconds=600,
@@ -453,6 +457,9 @@ def _phase_cutover_starting(doc) -> bool:
 		variables={
 			"VIRTUAL_MACHINE_NAME": doc.virtual_machine,
 			"DATA_DISK_GB": str(_vm_field(doc, "data_disk_gigabytes") or 0),
+			# Same per-VM nbd block clone-target used, so cutover disconnects the RIGHT
+			# devices (root = base+0, data = base+1) — never another migration's.
+			"NBD_BASE_SLOT": str(nbd_base_slot(doc.virtual_machine)),
 		},
 		timeout_seconds=120,
 	)
@@ -889,3 +896,26 @@ def nbd_port(virtual_machine: str) -> int:
 	import uuid as _uuid
 
 	return 10000 + (int(_uuid.UUID(virtual_machine).hex[:4], 16) % 5000)
+
+
+# Each migration's TARGET side needs a contiguous block of nbd CLIENT devices:
+# root disk, data disk, base-image ship, base-image-dir tar — 4 slots. Hosts ship
+# 16 nbd devices (nbds_max=16), so a per-VM base slot of (uuid % 4) * 4 fans four
+# concurrent migrations across /dev/nbd0-15 with no overlap. WITHOUT this the disk
+# clone hardcoded /dev/nbd0 & /dev/nbd1, so a second migration to the same target
+# latched onto the first's live nbd0 (wrong size → dm-clone "Invalid argument") —
+# found on a real double-migration to f2 (2026-07-02). Derived (not allocated) so
+# the controller and every host script agree from the UUID with no stored state.
+NBD_SLOTS_PER_MIGRATION = 4
+MAX_CONCURRENT_TARGET_MIGRATIONS = 4  # 4 * 4 = 16 = nbds_max
+
+
+def nbd_base_slot(virtual_machine: str) -> int:
+	"""The first of this VM's 4 contiguous nbd client slots on the TARGET host:
+	base+0 root, base+1 data, base+2 base-image, base+3 image-dir tar. A pure
+	function of the UUID (like nbd_port), so clone/cutover/base-ship all name the
+	same devices with no allocator."""
+	import uuid as _uuid
+
+	index = int(_uuid.UUID(virtual_machine).hex[4:8], 16) % MAX_CONCURRENT_TARGET_MIGRATIONS
+	return index * NBD_SLOTS_PER_MIGRATION
