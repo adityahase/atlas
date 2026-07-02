@@ -207,7 +207,8 @@ class Server(Document):
 	@frappe.whitelist()
 	def sync_scripts(self) -> int:
 		"""Re-upload the durable scripts (atlas package + systemd-invoked .py
-		hooks) to /var/lib/atlas/bin without re-running bootstrap.
+		hooks) to /var/lib/atlas/bin without re-running bootstrap, then reinstall
+		the atlas package into the venv so the new code is what imports resolve.
 
 		The development fast path: after editing anything under scripts/lib/atlas/
 		(or vm-network-up.py et al.) push the change to a live host in one scp
@@ -215,13 +216,26 @@ class Server(Document):
 		and mutates status). Bootstrap remains the single refresh point for unit
 		files; this is the subset that's pure code. Idempotent — a plain overwrite.
 
+		The scp lands the package at /var/lib/atlas/bin/atlas, but every entry
+		script and systemd hook imports `atlas` from the venv's site-packages,
+		where install.sh COPY-installed it at bootstrap (`uv pip install`, not
+		editable). Overwriting bin/atlas alone leaves that copy frozen — the edit
+		never takes effect. So we `uv pip install --reinstall` the just-uploaded
+		tree into the venv, exactly as install.sh's step 3 does; that is what makes
+		sync a true code refresh rather than a dead-drop into bin/atlas.
+
 		Returns the number of files uploaded.
 		"""
 		if not self.ipv4_address:
 			frappe.throw(f"Server {self.name} has no ipv4_address; cannot sync scripts")
+		connection = connection_for_server(self)
 		uploads = self._script_uploads()
-		upload_files(connection_for_server(self), uploads)
+		upload_files(connection, uploads)
+		self._reinstall_atlas_venv_package(connection)
 		return len(uploads)
+
+	def _reinstall_atlas_venv_package(self, connection) -> None:
+		reinstall_atlas_venv_package(connection, self.name)
 
 	@frappe.whitelist()
 	def reboot(self) -> str:
@@ -345,6 +359,27 @@ class Server(Document):
 		self.cli_ready = 1
 
 
+def reinstall_atlas_venv_package(connection, server_name: str) -> None:
+	"""Reinstall the durable /var/lib/atlas/bin tree into the Atlas venv so the
+	just-synced code is what `import atlas` resolves to. Mirrors install.sh's
+	step 3 (`uv pip install --reinstall`) verbatim — the venv holds a COPY, not an
+	editable link, so a plain scp overwrite of bin/atlas would not reach it. The
+	uv/venv literals match install.sh (UV_DIR / ATLAS_VENV / BIN_DIRECTORY); the
+	two trees don't share imports, so the paths are repeated here. Pure SSH — safe
+	to call from a sync_scripts_to_all worker thread."""
+	command = (
+		"sudo env VIRTUAL_ENV=/var/lib/atlas/venv "
+		"/var/lib/atlas/uv/uv pip install --reinstall /var/lib/atlas/bin"
+	)
+	with ssh_key_file(connection.ssh_private_key) as key_path:
+		stdout, stderr, exit_code = run_ssh(connection, key_path, command, timeout_seconds=300)
+	if exit_code != 0:
+		frappe.throw(
+			f"atlas venv reinstall failed on {server_name} (exit {exit_code}): "
+			f"{stderr[-500:] or stdout[-500:]}"
+		)
+
+
 def sync_scripts_to_all() -> dict[str, int]:
 	"""Push the durable scripts to every Active server in one sweep.
 
@@ -385,6 +420,7 @@ def sync_scripts_to_all() -> dict[str, int]:
 		with frappe_thread_context(site):
 			print(f"Syncing durable scripts to {name} ({connection.host})")
 			upload_files(connection, uploads)
+			reinstall_atlas_venv_package(connection, name)
 			print(f"Done syncing durable scripts to {name} ({connection.host})")
 		return name, len(uploads)
 
