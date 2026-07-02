@@ -362,6 +362,13 @@ class VirtualMachineSnapshot(Document):
 			return
 		if not frappe.db.exists("Server", self.server):
 			return
+		# The VM link is an audit backpointer on the teardown Task, not something the
+		# LV removal needs. An orphaned snapshot (its VM already deleted, e.g. by a
+		# host reset) must still tear its LV down, so drop a dangling link rather than
+		# let Task's link validation throw on a VM that no longer exists.
+		virtual_machine = self.virtual_machine
+		if virtual_machine and not frappe.db.exists("Virtual Machine", virtual_machine):
+			virtual_machine = None
 		# Remove both halves of the snapshot: the root snap LV and (when the VM had
 		# a data disk) the data snap LV. The empty data path is dropped by the Task
 		# runner, so a data-less snapshot's teardown is unchanged. A warm row also
@@ -376,6 +383,6 @@ class VirtualMachineSnapshot(Document):
 				"DATA_SNAPSHOT_ROOTFS_PATH": self.data_rootfs_path or "",
 				"MEMORY_DIRECTORY": self.memory_directory or "",
 			},
-			virtual_machine=self.virtual_machine,
+			virtual_machine=virtual_machine,
 			timeout_seconds=60,
 		)
