@@ -239,6 +239,7 @@ RECIPES: dict[str, "ImageRecipe"] = {
 		frappe_branch="version-15",
 		erpnext_branch="version-15",
 		python_version="3.11",
+		warm_entrypoint="warm.sh",
 	),
 	# Nightly tracks the moving `develop` of both Frappe and ERPNext. The bake records
 	# the resolved commit SHAs into the Image Build for traceability (image_build.run),
@@ -249,6 +250,7 @@ RECIPES: dict[str, "ImageRecipe"] = {
 		frappe_branch="develop",
 		erpnext_branch="develop",
 		python_version="3.14",
+		warm_entrypoint="warm.sh",
 	),
 	# --- The admin-console line. Same three Frappe versions, but baked in `admin`
 	# mode: build.sh skips `new-site` + ERPNext entirely and leaves only the bench +
