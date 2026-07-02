@@ -36,6 +36,164 @@ The whole operation is a **resumable phase state machine** recorded on a new
 rate-limit, a dropped RQ job, or an SSH blip. Each phase is idempotent and is
 re-entered from the row's recorded `status`.
 
+## 0. PLANNED — cut downtime to ~1–3s (boot-then-hydrate)
+
+> **Status: PLANNED, not built.** Everything below §1 describes the built
+> change-address flow. This section is the next planned evolution and the
+> **primary** performance goal for migration: bring the guest's downtime (the
+> window between the source unit stopping and the target unit starting) from the
+> ~60s a real f1→f2 run measured (2026-07-02) down to **~1–3s**. It is written
+> here so the plan, its caveats, and its risks are the source of truth before any
+> code moves.
+
+### 0.1 The gap — the prose already promises what the code doesn't do
+
+The intro above says "the target VM **boots immediately**, reading-through to
+the source over NBD while a background hydration copies every block locally."
+**The shipped phase machine does the opposite:** it stops the VM in `Pending`
+(phase 1) and holds it Stopped through `ExportingSnapshot` → `TargetPreparing` →
+`InjectingIdentity` → `Hydrating` (copy to 100%) → `CutoverStarting` (boot). The
+guest is down for the **entire** copy. The dm-clone read-through — whose whole
+purpose is *boot now, copy later* — is built and correct, but it is only ever
+collapsed *before* the first boot, so a running guest never actually reads
+through it. This is cold-copy-then-boot masquerading as boot-then-hydrate.
+
+Measured on a real run (`v9rbrglnm6`, tiny disk, from `Task` timestamps):
+
+| Segment | Duration | On downtime clock today? |
+|---|---|---|
+| `stop-vm` | ~3.4s | yes |
+| `migration-export-source` | ~0.8s | yes |
+| `migration-clone-target` (prepare) | ~3.0s | yes |
+| `Hydrating` (2 polls to 100%) | ~40s* | yes |
+| `migration-cutover-target` (collapse) | ~0.7s | yes |
+| `provision-vm --no-block` (boot target) | ~1.1s | **the only part that must be** |
+
+\* The ~40s was **not** disk copy (the disk was tiny) — it was RQ re-enqueue
+dead time between the two hydration polls (`start_migration` re-enqueues a fresh
+`long` job every step). So today's downtime is ~60–67s, of which the irreducible
+host work is **~2s** (`collapse` + `boot`), the rest is copy-while-down plus
+scheduler latency.
+
+### 0.2 The change — move the boot ahead of hydration
+
+Reorder the phase machine so the target boots on the dm-clone **before**
+hydration, and hydration runs while the guest is already up:
+
+```
+ Pending           stop the source VM                       ← DOWNTIME STARTS
+ ExportingSnapshot source snapshot + qemu-nbd (disk frozen)
+ TargetPreparing   create LV(s) + nbd-client + dm-clone
+ InjectingIdentity allocate address + inject identity THROUGH the clone device
+ CutoverStarting   provision-vm boots the target on the dm-clone read-through  ← VM UP (~2s)
+ Hydrating         poll to 100% while the guest runs, reading-through NBD      ← NO downtime
+ CollapseClone     dmsetup remove once 100%, disconnect nbd (renamed from the
+                   collapse half of today's CutoverStarting)
+ Repointing        commit VM row / re-point Subdomains (change-address)
+ Cleanup           source teardown (unchanged)
+```
+
+Downtime shrinks to **stop + export + prepare + inject + boot** — the pre-boot
+critical path — with hydration and collapse moved entirely off it.
+
+### 0.3 The consistency invariant that makes this safe
+
+The source VM's disk **must stay frozen** (read-only, no writer) for the whole
+window the target reads through it — both the source snapshot and the live
+target VM are backed by that snapshot. The current design gets this for free by
+keeping the source **Stopped**, and boot-then-hydrate **keeps that exact
+property**: the source stays Stopped from `Pending` until `Cleanup`. This is the
+crucial difference from *live* (warm) migration and why cold boot-then-hydrate is
+sound where live migration is a [non-goal](./README.md) — with the source off,
+there is **no writer racing the reader**, so the read-through can never see a
+torn write. Rollback is still trivial through `Hydrating`: `dmsetup remove` the
+target clone and `systemctl start` the source; its disk was never mutated.
+
+### 0.4 What must move earlier, and the caveats
+
+- **Identity injection moves from cutover into `InjectingIdentity`, and it must
+  write through the CLONE device**, not the bare thin LV. §5 step 5 already
+  records the trap: the plain `atlas-vm-<uuid>` LV is held open by the clone and
+  mounts `busy` (verified 2026-07-02) — you must mount
+  `/dev/mapper/atlas-vm-<uuid>-clone`. Writes through the clone land on the dest
+  and count toward hydration. Today the identity inject rides `provision-vm` at
+  cutover (against the *collapsed* LV); boot-then-hydrate injects earlier, so
+  `provision-vm` at boot must **not** re-inject (or must be safe to re-run
+  through the clone with `preserve_host_keys=1`).
+- **`provision-vm` must boot against the clone device, not the plain LV.** It
+  exposes `rootfs.ext4` in the jail from the disk LV (step 4b). On the
+  boot-then-hydrate path that block node must point at
+  `/dev/mapper/atlas-vm-<uuid>-clone` for the read-through to serve the guest;
+  at `CollapseClone` the clone is removed and the node must be re-pointed at the
+  plain LV. **Caveat:** re-pointing a live VM's backing device is the delicate
+  step — either (a) the collapse is transparent because `dmsetup remove` on a
+  fully-hydrated clone leaves the *same* dev-mapper node serving the plain LV's
+  blocks (needs verification that Firecracker's open fd survives), or (b) collapse
+  requires a brief pause/re-open of the drive. **This must be host-verified before
+  relying on <10s** — it is the one genuinely unproven step in the plan.
+- **`qemu-nbd --persistent` is load-bearing here** (§5 already requires it): the
+  guest now reads through NBD for the *whole* hydration window while running, so a
+  server that exits on first disconnect would fault the live guest, not just a
+  background copy.
+- **Data disk:** the second dm-clone (§5 *Data disk*) must be booted-through
+  identically — the guest's `/dev/vdb` reads through NBD until its own hydration
+  completes. Both clones must be 100% before `CollapseClone`.
+- **Kill the RQ re-enqueue latency on the pre-cutover path.** `start_migration`
+  re-enqueues a fresh job between every step; `advance_migration` already returns
+  `True` ("more work now") precisely so the driver can loop **inline** without
+  waiting a tick. Change `start_migration` to loop inline while `advanced` is
+  True and only re-enqueue when a phase *holds*. After boot-then-hydrate,
+  `Hydrating` is the only holding phase and it is **off** the downtime clock — so
+  the entire pre-boot path runs in one uninterrupted worker job. This alone
+  removes the ~40s dead time §0.1 measured.
+- **`provision-vm --no-block` already keeps guest boot off the clock** — it
+  returns once the unit is *queued*, and the controller marks the VM Running
+  without waiting for boot. So a slow guest boot does not extend downtime; only
+  the pre-boot host work does. Faster disks/network shorten hydration *duration*
+  (and the rollback window) but no longer affect **downtime**, since hydration is
+  off the critical path — so they are a lower priority for this goal.
+
+### 0.5 Further downtime trims (after the reorder)
+
+With hydration off the clock, the remaining downtime is stop + export + prepare +
+inject + boot. To reach 1–3s:
+
+1. **Parallelize source export ∥ target prepare setup.** `migration-export-source`
+   (source host) and the module-load / LV-create / pool-headroom pre-flight of
+   `migration-clone-target` (target host) touch different hosts and are
+   independent; only the nbd-client *dial* must wait for the export to be
+   listening. Run the two hosts' setup concurrently.
+2. **Speed up the cold stop (~3.4s, the largest pre-boot cost).** A migration
+   cold-stop discards RAM anyway, so a graceful-shutdown grace period is wasted —
+   check whether `stop-vm` is waiting out a shutdown timeout and make the
+   migration path stop harder/faster.
+3. **Fold the pre-boot phases into one inline drive** (see the RQ caveat above) so
+   there is zero scheduler latency between stop and boot.
+
+### 0.6 Expected result
+
+| | Today | After §0.2 + RQ fix | After §0.5 |
+|---|---|---|---|
+| Downtime (stop→start) | ~60–67s | ~8–10s | **~2–4s** |
+| Total wall-clock | ~78s | ~78s | ~78s (hydration now overlaps *uptime*) |
+
+The reorder (§0.2) plus the inline-drive fix does most of the work; §0.5 is what
+takes it into the 1–3s target. Total wall-clock is roughly unchanged — the copy
+still happens — but it now happens while the guest is **serving**, not while it
+is down.
+
+### 0.7 Build & verify
+
+Fold into the staged rollout (§9) as a refinement of the change-address path
+(stage 1–2), since it is pure phase-machine reordering plus the inline drive —
+it needs no keep-address machinery. **Host-verify the two unproven facts before
+claiming <10s:** (a) identity inject through the mounted clone device, and (b)
+the live drive re-point at `CollapseClone` (does Firecracker's open rootfs fd
+survive `dmsetup remove`, or is a brief drive re-open needed?). The e2e
+assertion grows a **downtime measurement**: timestamp source-unit-down →
+target-unit-Running and assert it is under the target threshold, alongside the
+existing disk/identity/Subdomain checks.
+
 ## Why this shape
 
 Three decisions dominate.
@@ -848,6 +1006,15 @@ export are **held alive until hydration hits 100%**, and `Cleanup` runs **only
 after** the dm-clone collapses. This gives fast availability *and* a clean
 rollback window — the source VM and its disk stay intact and re-startable through
 the entire `CutoverStarting` phase.
+
+> **NOTE — the built code does not yet boot early.** This "boots at any hydration
+> %" acceptance is the *design intent*, but the shipped phase machine hydrates to
+> 100% **before** the first boot, so the guest is down for the whole copy.
+> Actually booting on the read-through (and thereby collapsing downtime to ~1–3s)
+> is the planned **§0 boot-then-hydrate** reorder above — read it for the phase
+> reordering, the frozen-source consistency invariant, and the two host facts
+> (inject-through-clone, live drive re-point at collapse) that must be verified
+> first.
 
 ### Source side (`migration-export-source.py`, phase `ExportingSnapshot`)
 
