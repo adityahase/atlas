@@ -114,7 +114,7 @@ class Site(Document):
 			enqueue_after_commit=True,
 			site_name=self.name,
 			# The pilot credential is bench-level; it rides the job (never the Site row) to
-			# the backing VM + the bench's common_site_config. Flags are set by create_site.
+			# the backing VM + the bench's bench.toml. Flags are set by create_site.
 			pilot_credential_id=self.flags.get("pilot_credential_id"),
 			central_endpoint=self.flags.get("central_endpoint"),
 			central_auth_token=self.flags.get("central_auth_token"),

@@ -105,7 +105,7 @@ class TestCreateSite(IntegrationTestCase):
 
 	def test_bench_credential_rides_the_provision_job_not_the_site(self) -> None:
 		"""The pilot credential is bench-level: create_site threads it into the provision
-		job (→ VM + common_site_config), never onto the Site row, and never into _mirror."""
+		job (→ VM + bench.toml), never onto the Site row, and never into _mirror."""
 		with patch("frappe.enqueue") as enqueue:
 			result = site_api.create_site(
 				team=TEAM,

@@ -50,7 +50,7 @@ def create_site(
 	# mints it and hands us the id + the endpoint/token the pilot calls back with; we
 	# ride them through the provision job (flags → auto_provision kwargs) to their real
 	# homes: pilot_credential_id on the backing VM (echoed to Central on vm.* events) and
-	# the endpoint/token in the bench's common_site_config (written at deploy). Nothing is
+	# the endpoint/token in the bench's bench.toml (written at deploy). Nothing is
 	# persisted on the Site, and the token never appears in _mirror.
 	site = frappe.get_doc({"doctype": "Site", "subdomain": subdomain, "tenant": tenant})
 	site.flags.pilot_credential_id = pilot_credential_id

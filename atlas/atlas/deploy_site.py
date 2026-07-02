@@ -175,7 +175,7 @@ def deploy_site(
 			command += substitute(" --warm-vm-uuid {}", (vm.name,))
 		# Central handoff: the pilot's bench-level callback endpoint + token, threaded from
 		# create_site (never stored on the Site). deploy-site.py writes them into the
-		# bench's common_site_config so pilot→Central calls authenticate.
+		# bench's bench.toml so pilot→Central calls authenticate.
 		if central_endpoint and central_auth_token:
 			command += substitute(
 				" --central-endpoint {} --central-auth-token {}",

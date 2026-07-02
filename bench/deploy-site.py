@@ -517,10 +517,10 @@ def main() -> None:
 		log("login URL minted")
 
 	# Central handoff: persist the pilot's callback endpoint + token into the bench's
-	# common_site_config (bench-cli owns that file, so we go through its command rather
-	# than writing JSON here), so pilot→Central calls can authenticate with X-Pilot-Token.
+	# bench.toml (Pilot owns that file, so we go through its command rather than writing
+	# TOML here), so pilot→Central calls can authenticate with X-Pilot-Token.
 	if inputs.central_endpoint and inputs.central_auth_token:
-		log("writing Central config to common_site_config (bench set-central-config) …")
+		log("writing Central config to bench.toml (bench set-central-config) …")
 		_bench(
 			"set-central-config", "--endpoint", inputs.central_endpoint, "--token", inputs.central_auth_token
 		)
