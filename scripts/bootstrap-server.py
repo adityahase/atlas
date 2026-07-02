@@ -166,6 +166,16 @@ PACKAGES = [
 	"squashfs-tools",
 	"thin-provisioning-tools",
 	"wireguard-tools",
+	# VM migration (spec/19): qemu-utils ships qemu-nbd (the source NBD export),
+	# nbd-client connects it on the target. socat bridges the SSH-forwarded TCP
+	# stream to a tun device for the keep-address §2.1 tunnel. The `nbd` +
+	# `dm_clone` kernel modules come from linux-modules-extra, installed
+	# version-pinned in step 11b (a floating metapackage could drag in a
+	# different kernel). Folded into every Active host so migration is a
+	# first-class server capability, not a re-bootstrap-on-demand prereq.
+	"qemu-utils",
+	"nbd-client",
+	"socat",
 ]
 
 # The host's Atlas interpreter — a uv-managed venv on a controlled CPython — is
@@ -457,6 +467,30 @@ def main() -> None:
 	install_file("dm_thin_pool\n", "/etc/modules-load.d/60-atlas-lvm.conf", mode="0644")
 	ThinPool().ensure()
 	run("sudo systemctl enable atlas-pool.service", check=False, quiet=True)
+
+	# 11b. VM migration kernel modules (spec/19). The cold-migration disk move runs
+	#      over NBD into a device-mapper `clone` target, so the target host needs
+	#      `nbd` and `dm_clone`. They live in linux-modules-extra (not the cloud
+	#      kernel's base set), so install the package matching the RUNNING kernel
+	#      exactly — `linux-modules-extra-$(uname -r)`, never the floating
+	#      `-generic` metapackage, which can pull a different kernel. Then load both
+	#      modules and persist them for reboots, mirroring dm_thin_pool. The
+	#      60-atlas-blocklist (step 6) only ever lists unused fs/net modules, so it
+	#      never shadows dm_clone/nbd. `dm_clone` (CONFIG_DM_CLONE) merged in 6.4;
+	#      Ubuntu 24.04 ships 6.8, so the module is present once the extra package
+	#      is installed.
+	run(
+		"sudo",
+		"apt-get",
+		"-o",
+		"DPkg::Lock::Timeout=300",
+		"install",
+		"-y",
+		f"linux-modules-extra-{_uname('-r')}",
+	)
+	run("sudo", "modprobe", "nbd")
+	run("sudo", "modprobe", "dm_clone")
+	install_file("nbd\ndm_clone\n", "/etc/modules-load.d/60-atlas-migration.conf", mode="0644")
 
 	# 12. Record state for Atlas to pick up. Single JSON file is the canonical
 	#     source of truth. The bytes still land in /var/lib/atlas/bootstrap.json;

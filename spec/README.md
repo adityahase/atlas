@@ -108,9 +108,13 @@ keep it the source of truth.
    not the host's stock `python3`; see
    [03-bootstrapping.md § The Atlas interpreter and CLI](./03-bootstrapping.md)),
    plus `firecracker`, `systemd`, `iproute2`, `nftables`, `curl`, `jq`,
-   `e2fsprogs`, `squashfs-tools`, `lvm2`, `thin-provisioning-tools`. The package
-   is stdlib-only today, but installing it the standard way means a real
-   dependency is fine. No agent runs on the server.
+   `e2fsprogs`, `squashfs-tools`, `lvm2`, `thin-provisioning-tools`, and —
+   for VM migration ([19-vm-migration.md](./19-vm-migration.md)) — `qemu-utils`
+   (the `qemu-nbd` disk export), `nbd-client`, `socat` (the §2.1 tunnel), and
+   the `nbd` + `dm_clone` kernel modules from `linux-modules-extra-$(uname -r)`.
+   The package is stdlib-only today, but installing it the standard way means a
+   real dependency is fine.
+   No agent runs on the server.
 6. **Don't import — copy.** If a third-party library has a good idea (pyinfra,
    zx), reimplement the small subset we need. We avoid library coupling on a
    foundational layer.
